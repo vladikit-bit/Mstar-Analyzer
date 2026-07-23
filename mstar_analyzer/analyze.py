@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+from pathlib import Path
+import hashlib
+from .firmware_tree import FirmwareNode
+from .firmware_map import build_firmware_map
+from .extract import extract_all
+from .strings import extract_ascii_strings
+from .render import render_report
+from .json_export import build_json_report
+from .signatures import Finding
+from .detectors.features import detect_features
+from .detectors.objects import detect_objects
+from .object_analyzer import analyze_objects
+from .detectors.classify import classify_node
+from .detectors.libraries import analyze_libraries
+from .detectors.code_caves import detect_code_caves
+
+MAX_DEPTH = 8
+MIN_SIZE = 512
+
+def _annotate_findings_with_extraction_outcome(findings, results) -> None:
+    """
+    extract_all() вже РЕАЛЬНО намагається розпакувати кожен candidate —
+    але раніше цей результат використовувався лише для побудови дочірніх
+    вузлів (успішні), а причина невдачі для решти просто губилась. Тепер
+    записуємо результат назад у сам Finding, щоб "Findings" у звіті
+    показував не лише здогадку заголовка (dict=..., usize=...), а й
+    реальний висновок: чи це справді був потік, чи ні, і чому.
+    """
+
+    by_offset = {result.finding.offset: result for result in results if result.finding is not None}
+
+    for finding in findings:
+
+        result = by_offset.get(finding.offset)
+
+        if result is None:
+            # candidate існував (мав зареєстрований Extractor), але
+            # extract_all() його пропустив — його офсет потрапляє в
+            # діапазон уже підтвердженого сусіднього потоку
+            # (skip_covered=True за замовчуванням).
+            finding.extraction = "not attempted (covered by a nearby confirmed stream)"
+            continue
+
+        if result.success:
+            finding.extraction = f"confirmed — decompressed {result.output_size:,} bytes"
+        else:
+            finding.extraction = f"failed — {result.error}"
+
+
+def collect_extract_candidates(fw_map):
+    findings = []
+
+    for entry in fw_map.entries:
+        if entry.kind in (
+            "lzma-alone-header",
+            "gzip",
+            "xz",
+        ):
+            findings.append(
+                Finding(
+                    offset=entry.offset,
+                    name=entry.kind,
+                    confidence=entry.confidence,
+                    detail=entry.detail,
+                )
+            )
+
+    return findings
+
+def analyze_node(node: FirmwareNode, depth: int = 0) -> None:
+    if depth >= MAX_DEPTH:
+        return
+
+    if len(node.data) < MIN_SIZE:
+        return
+
+    fw = build_firmware_map(node.data)
+    node.firmware_map = fw
+
+    node.code_caves = detect_code_caves(node.data, firmware_map=fw)
+
+    findings = collect_extract_candidates(fw)
+    
+    node.findings.extend(findings)
+
+    results = extract_all(node.data, findings)
+
+    _annotate_findings_with_extraction_outcome(findings, results)
+
+    node.strings = extract_ascii_strings(node.data)
+
+    node.features = detect_features(node.strings)
+
+    node.objects = detect_objects(node.data)
+
+    analyze_objects(
+        node.objects,
+        node.data,
+    )
+
+    node.analysis = analyze_libraries(node.strings)
+
+    classify_node(node)
+
+    seen = set()
+
+    for result in results:
+
+        if not result.success:
+            continue
+
+        if result.data is None:
+            continue
+
+        digest = hashlib.sha256(result.data).digest()
+
+        if digest in seen:
+            continue
+
+        seen.add(digest)
+
+        child = FirmwareNode(
+            name=result.method,
+            offset=result.offset,
+            data=result.data,
+        )
+
+        classify_node(child)
+
+        node.add_child(child)
+
+        analyze_node(child, depth + 1)
+
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description="MStar Firmware Analyzer"
+    )
+
+    parser.add_argument(
+        "firmware",
+        help="Path to firmware image"
+    )
+
+    parser.add_argument(
+        "-o", "--output",
+        metavar="FILE",
+        help=(
+            "Write the full report to FILE instead of the terminal "
+            "(plain text — identical content to what would print "
+            "on screen)."
+        ),
+    )
+
+    parser.add_argument(
+        "-j", "--json",
+        metavar="FILE",
+        dest="json_path",
+        help=(
+            "Also write a machine-readable JSON snapshot of the full "
+            "analysis to FILE (tree, per-node features/objects/findings/"
+            "code caves/library analysis, and the cross-tree summary). "
+            "Independent of --output — can be used together or alone."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    firmware = Path(args.firmware)
+
+    if not firmware.exists():
+        parser.error(f"File not found: {firmware}")
+
+    if args.output:
+
+        output_path = Path(args.output)
+
+        with output_path.open("w", encoding="utf-8") as f:
+            with contextlib.redirect_stdout(f):
+                _run(firmware, json_path=args.json_path)
+
+        # Це йде на реальний термінал, а не у файл — redirect_stdout
+        # вище вже закрився разом із блоком `with`.
+        print(f"Report written to {output_path}")
+
+    else:
+        _run(firmware, json_path=args.json_path)
+
+    return 0
+
+
+def _run(firmware: Path, json_path: str | None = None) -> None:
+
+    data = firmware.read_bytes()
+    root = FirmwareNode(
+       name=firmware.name,
+       offset=0,
+       data=data,
+    )
+    print("=" * 70)
+    print("MStar Firmware Analyzer")
+    print("=" * 70)
+    print()
+
+    print(f"Input : {firmware}")
+    print(f"Size  : {len(data):,} bytes")
+    print()
+
+    print("[1/3] Building firmware map...")
+
+    fw = build_firmware_map(root.data)
+
+    print()
+    print("Entropy")
+    print("-" * 70)
+    print(fw.sparkline())
+
+    print()
+    print("Firmware map")
+    print("-" * 70)
+    print(fw.as_table())
+
+    print()
+    print("[2/3] Extracting compressed streams...")
+    print()
+
+    analyze_node(root)
+
+    if json_path:
+        report = build_json_report(root)
+        Path(json_path).write_text(
+            json.dumps(report, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"JSON report written to {json_path}")
+        print()
+
+    render_report(root)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

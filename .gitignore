@@ -1,0 +1,14 @@
+﻿# Бінарники та дампи
+firmware/
+*.bin
+*.img
+*.dump
+
+# Кеш Python
+__pycache__/
+*.pyc
+
+# Папки середовища розробки
+.zcode/
+.vscode/
+.idea/
