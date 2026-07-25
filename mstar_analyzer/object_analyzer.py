@@ -803,7 +803,7 @@ def _parse_elf64_header(data: bytes, endian: str, pos: int = 0) -> dict:
 
 
 def _parse_program_headers(
-    data: bytes, hdr: dict, endian: str,
+    data: bytes, hdr: dict, endian: str, pos: int = 0,
 ) -> tuple[list[dict], list[str]]:
     segments: list[dict] = []
     notes: list[str] = []
@@ -815,7 +815,10 @@ def _parse_program_headers(
         notes.append("extended program header numbering (e_phnum=0xFFFF) — not fully parsed")
         return segments, notes
 
-    total = hdr["phoff"] + hdr["phnum"] * hdr["phentsize"]
+    # phoff у заголовку відносний початку ELF — додаємо pos для доступу до data.
+    phoff_abs = pos + hdr["phoff"]
+
+    total = phoff_abs + hdr["phnum"] * hdr["phentsize"]
     if total > len(data):
         notes.append("program headers truncated (table extends past available data)")
         return segments, notes
@@ -825,7 +828,7 @@ def _parse_program_headers(
         return segments, notes
 
     for i in range(hdr["phnum"]):
-        base = hdr["phoff"] + i * hdr["phentsize"]
+        base = phoff_abs + i * hdr["phentsize"]
         try:
             if hdr["is64"]:
                 # p_type(I) p_flags(I) p_offset(Q) p_vaddr(Q) p_paddr(Q)
@@ -860,7 +863,7 @@ def _parse_program_headers(
 
 
 def _parse_section_headers(
-    data: bytes, hdr: dict, endian: str,
+    data: bytes, hdr: dict, endian: str, pos: int = 0,
 ) -> tuple[list[dict], list[str]]:
     sections: list[dict] = []
     notes: list[str] = []
@@ -872,7 +875,10 @@ def _parse_section_headers(
         notes.append("extended section header numbering (e_shnum=0xFFFF) — not fully parsed")
         return sections, notes
 
-    total = hdr["shoff"] + hdr["shnum"] * hdr["shentsize"]
+    # shoff у заголовку відносний початку ELF — додаємо pos для доступу до data.
+    shoff_abs = pos + hdr["shoff"]
+
+    total = shoff_abs + hdr["shnum"] * hdr["shentsize"]
     if total > len(data):
         notes.append("section headers truncated (table extends past available data)")
         return sections, notes
@@ -882,10 +888,11 @@ def _parse_section_headers(
         return sections, notes
 
     # String table для імен секцій: секція з індексом e_shstrndx.
+    # sh_offset всередині секції теж відносний початку ELF.
     strtab_start = None
     strtab_end = None
     if hdr["shstrndx"] != 0 and hdr["shstrndx"] < hdr["shnum"]:
-        shstr_base = hdr["shoff"] + hdr["shstrndx"] * hdr["shentsize"]
+        shstr_base = shoff_abs + hdr["shstrndx"] * hdr["shentsize"]
         try:
             if hdr["is64"]:
                 _sh_name, _sh_type, _sh_flags, _sh_addr, sh_offset, sh_size, *_ = (
@@ -895,15 +902,15 @@ def _parse_section_headers(
                 _sh_name, _sh_type, _sh_flags, _sh_addr, sh_offset, sh_size, *_ = (
                     struct.unpack_from(endian + "IIIIIIII", data, shstr_base)
                 )
-            strtab_start = sh_offset
-            strtab_end = sh_offset + sh_size
+            strtab_start = pos + sh_offset
+            strtab_end = pos + sh_offset + sh_size
             if strtab_end > len(data):
                 strtab_end = len(data)
         except struct.error:
             pass
 
     for i in range(hdr["shnum"]):
-        base = hdr["shoff"] + i * hdr["shentsize"]
+        base = shoff_abs + i * hdr["shentsize"]
         try:
             if hdr["is64"]:
                 # sh_name(I) sh_type(I) sh_flags(Q) sh_addr(Q)
@@ -1011,9 +1018,9 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
 
     try:
         if is64:
-            hdr = _parse_elf64_header(data, endian)
+            hdr = _parse_elf64_header(data, endian, pos)
         else:
-            hdr = _parse_elf32_header(data, endian)
+            hdr = _parse_elf32_header(data, endian, pos)
     except struct.error as exc:
         obj.validated = False
         obj.confidence = "low"
@@ -1065,8 +1072,8 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
     # Крок 4-5: program headers + section headers
     # ------------------------------------------------------------------
 
-    segments, ph_notes = _parse_program_headers(data, hdr, endian)
-    sections, sh_notes = _parse_section_headers(data, hdr, endian)
+    segments, ph_notes = _parse_program_headers(data, hdr, endian, pos)
+    sections, sh_notes = _parse_section_headers(data, hdr, endian, pos)
 
     notes = ph_notes + sh_notes
 
@@ -1112,26 +1119,33 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
     # ------------------------------------------------------------------
     # Крок 7: obj.size — скільки байтів у файлі займає цей ELF
     # ------------------------------------------------------------------
+    #
+    # Усі офсети в ELF (p_offset, sh_offset, e_shoff) відносні початку
+    # файлу, тобто початку ELF. У буфері `data` ELF лежить з офсету
+    # `pos`, тож усі кінці спочатку рахуємо як "абсолютні в data", а
+    # потім віднімаємо `pos`, щоб отримати розмір самого ELF-об'єкта.
 
     end_candidates = []
 
     # max(p_offset + p_filesz) серед PT_LOAD (type=1)
     for seg in segments:
         if seg.get("_type_num") == 1 and seg.get("_filesz_num"):
-            end_candidates.append(seg["_offset_num"] + seg["_filesz_num"])
+            # _offset_num — відносний; + pos → абсолютний у data
+            end_candidates.append(pos + seg["_offset_num"] + seg["_filesz_num"])
 
-    # end of section header table
+    # end of section header table (hdr["shoff"] відносний)
     if hdr["shnum"] and hdr["shnum"] != ELF_EXTENDED_NUMBER and hdr["shoff"]:
         end_candidates.append(
-            hdr["shoff"] + hdr["shnum"] * hdr["shentsize"]
+            pos + hdr["shoff"] + hdr["shnum"] * hdr["shentsize"]
         )
 
     # max(sh_offset + sh_size) серед секцій з реальними даними (не NOBITS).
-    # Сирі sh_offset/sh_size з published sections недоступні (тільки hex-
-    # рядки), тож перечитуємо їх напряму з section header table.
+    # sh_offset/sh_size перечитуємо з section header table напряму
+    # (published sections зберігають їх лише як hex-рядки).
     if hdr["shnum"] and hdr["shnum"] != ELF_EXTENDED_NUMBER and hdr["shoff"]:
+        shoff_abs = pos + hdr["shoff"]
         for i in range(min(hdr["shnum"], 4096)):
-            base = hdr["shoff"] + i * hdr["shentsize"]
+            base = shoff_abs + i * hdr["shentsize"]
             try:
                 if is64:
                     _sh_name, sh_type, _sh_flags, _sh_addr, sh_offset, sh_size, *_ = (
@@ -1142,7 +1156,7 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
                         struct.unpack_from(endian + "IIIIIIII", data, base)
                     )
                 if sh_type != 8 and sh_size:  # не SHT_NOBITS (.bss не займає файл)
-                    end_candidates.append(sh_offset + sh_size)
+                    end_candidates.append(pos + sh_offset + sh_size)
             except struct.error:
                 break
 
