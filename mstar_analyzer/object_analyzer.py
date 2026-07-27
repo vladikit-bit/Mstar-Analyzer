@@ -1179,12 +1179,12 @@ def analyze_mboot_env_block(obj: EmbeddedObject, data: bytes) -> None:
     """
     from .analyzers.mboot_env import parse_mboot_env_block, compute_confidence
 
-    # Знайти фактичний offset маркера MBOT- всередині блоку
-    marker_pos = data.find(b"MBOT-", obj.offset)
-    if marker_pos == -1 or marker_pos - obj.offset > 512:
+    # obj.offset — це offset маркера MBOT- (встановлює детектор)
+    marker_pos = obj.offset
+    if marker_pos + 10 > len(data):
         obj.validated = False
         obj.confidence = "low"
-        obj.metadata["reason"] = "MBOT- marker not found within block"
+        obj.metadata["reason"] = "MBOT- marker near end of data"
         return
 
     info = parse_mboot_env_block(data, marker_pos)

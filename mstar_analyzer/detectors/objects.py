@@ -174,9 +174,52 @@ def detect_lua_bytecode(data: bytes) -> list[EmbeddedObject]:
     return objects
 
 
+def detect_mboot_env_block(data: bytes) -> list[EmbeddedObject]:
+    """
+    Пошук MBoot Env Block (MStar Boot environment configuration).
+
+    Шукає маркер ``MBOT-`` — початок version string в блоці конфігурації
+    MBoot (видозмінений U-Boot).  Детектор НЕ розбирає внутрішню структуру —
+    лише фіксує кандидат.  Глибокий парсинг (preamble, version string, env
+    variables, size, confidence) виконує
+    ``object_analyzer.analyze_mboot_env_block()``.
+
+    Підтримує декілька MBoot-блоків в одному файлі (кожен маркер —
+    окремий EmbeddedObject).
+    """
+    objects: list[EmbeddedObject] = []
+    n = len(data)
+    pos = 0
+
+    while True:
+        pos = data.find(b"MBOT-", pos)
+        if pos == -1:
+            break
+
+        # Базова валідація: маркер має бути не на самому кінці файлу
+        if pos + 10 > n:
+            pos += 1
+            continue
+
+        objects.append(
+            EmbeddedObject(
+                offset=pos,
+                size=None,
+                kind="MBootEnvBlock",
+                description="MBoot environment block",
+                confidence="low",
+            )
+        )
+
+        pos += 5  # пропустити "MBOT-"
+
+    return objects
+
+
 DETECTORS = (
     detect_png,
     detect_jpeg,
     detect_lua_bytecode,
     detect_elf,
+    detect_mboot_env_block,
 )

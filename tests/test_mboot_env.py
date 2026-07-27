@@ -267,7 +267,12 @@ class TestDetectMbootEnvBlock(unittest.TestCase):
         objects = detect_mboot_env_block(block)
         self.assertEqual(len(objects), 1)
         self.assertEqual(objects[0].kind, "MBootEnvBlock")
-        self.assertIn("MBOT-", objects[0].description)
+        self.assertEqual(objects[0].description, "MBoot environment block")
+        # offset — це offset маркера MBOT- (не preamble_start)
+        self.assertEqual(objects[0].offset, block.find(b"MBOT-"))
+        # size та confidence встановлює analyzer, детектор не заповнює
+        self.assertIsNone(objects[0].size)
+        self.assertEqual(objects[0].confidence, "low")
 
     def test_no_false_positive_without_marker(self):
         data = b"\x00" * 1024 + b"Some random text\x00" * 32
@@ -382,11 +387,10 @@ class TestFlashBinIntegration(unittest.TestCase):
     def test_block_offset_near_0xB000(self):
         objects = detect_mboot_env_block(self.data)
         obj = objects[0]
-        # Preamble має починатися ближче до 0xB000.
-        # Точність ±1 байт — це обмеження евристики: якщо перший байт
-        # preamble збігається з padding-байтом (0x00 або 0xFF), він
-        # вважається частиною padding.
-        self.assertLessEqual(obj.offset, 0xB002)
+        # obj.offset — це offset маркера MBOT- (не preamble_start).
+        # Маркер розташований після preamble, тому його позиція
+        # трохи більша за preamble_start.
+        self.assertLessEqual(obj.offset, 0xB100)
         self.assertGreaterEqual(obj.offset, 0xA000)
 
     def test_version_string_extracted(self):
