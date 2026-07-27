@@ -3,6 +3,7 @@ from .openssl import OpenSSLInfo, analyze_openssl
 from .busybox import BusyBoxInfo, analyze_busybox
 from .runtime import RuntimeInfo, analyze_runtime
 from .sdk_symbols import SdkSymbolProfile, analyze_sdk_symbols
+from .mboot_env import MBootVariable, MBootEnvBlockInfo, parse_mboot_env_block, compute_confidence
 
 __all__ = [
     "FFmpegInfo",
@@ -15,4 +16,8 @@ __all__ = [
     "analyze_runtime",
     "SdkSymbolProfile",
     "analyze_sdk_symbols",
+    "MBootVariable",
+    "MBootEnvBlockInfo",
+    "parse_mboot_env_block",
+    "compute_confidence",
 ]
