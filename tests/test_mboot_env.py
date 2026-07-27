@@ -323,6 +323,23 @@ class TestAnalyzeMbootEnvBlock(unittest.TestCase):
         self.assertEqual(vars_list[1]["name"], "MBoot_IN")
         self.assertEqual(vars_list[1]["value"], "SPI_FLASH")
 
+    def test_size_computed_from_block_end_and_preamble(self):
+        """obj.size = block_end - preamble_offset (анализатор власне обчислює розмір)."""
+        block = _build_mboot_block(
+            preamble_size=64,
+            version="MBOT-1106.0.10.test",
+            variables={"Board": "TEST_BD", "MBoot_IN": "SPI_FLASH"},
+            total_block_size=1024,
+        )
+        objects = detect_mboot_env_block(block)
+        obj = objects[0]
+        analyze_mboot_env_block(obj, block)
+
+        self.assertIsNotNone(obj.size)
+        self.assertGreater(obj.size, 0)
+        # size має охоплювати preamble + version + env
+        self.assertGreater(obj.size, 64)  # принаймні preamble_size
+
     def test_confidence_high_for_well_formed_block(self):
         block = _build_mboot_block(
             preamble_size=64,

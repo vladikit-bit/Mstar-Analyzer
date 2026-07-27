@@ -34,6 +34,9 @@ def analyze_objects(
         elif obj.kind == "ELF":
             analyze_elf(obj, data)
 
+        elif obj.kind == "MBootEnvBlock":
+            analyze_mboot_env_block(obj, data)
+
 
 def _compute_png_length(data: bytes, pos: int) -> int | None:
     """
@@ -1151,3 +1154,63 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
 
     if end_candidates:
         obj.size = max(end_candidates) - pos
+
+
+# ============================================================================
+# MBoot Environment Block
+# ============================================================================
+#
+# MBoot (MStar Boot) — видозмінений U-Boot.  Конфігураційний блок містить
+# preamble (бінарні дані), version string (MBOT-...) та env variables
+# (key=value пари, розділені \n).
+#
+# Детектор detect_mboot_env_block() у detectors/objects.py знаходить блок
+# за маркером MBOT- та визначає межі.  Тут — глибокий парсинг:
+# розбір version string, витяг env variables, заповнення metadata.
+
+
+def analyze_mboot_env_block(obj: EmbeddedObject, data: bytes) -> None:
+    """
+    Глибокий парсинг MBoot Env Block.
+
+    Делегує до analyzers/mboot_env.parse_mboot_env_block(), потім
+    заповнює obj.metadata структурованими ключами для подальшого
+    відображення у звіті та JSON-експорті.
+    """
+    from .analyzers.mboot_env import parse_mboot_env_block, compute_confidence
+
+    # Знайти фактичний offset маркера MBOT- всередині блоку
+    marker_pos = data.find(b"MBOT-", obj.offset)
+    if marker_pos == -1 or marker_pos - obj.offset > 512:
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "MBOT- marker not found within block"
+        return
+
+    info = parse_mboot_env_block(data, marker_pos)
+
+    # Update confidence based on full parse
+    preamble_found = info.preamble_size > 0
+    obj.confidence = compute_confidence(info, preamble_found=preamble_found)
+
+    # Metadata: version
+    obj.metadata["mboot_version"] = info.version_string
+
+    # Metadata: preamble
+    obj.metadata["mboot_preamble_offset"] = info.preamble_offset
+    obj.metadata["mboot_preamble_size"] = info.preamble_size
+
+    # Metadata: variables (list of dicts для JSON-сумісності)
+    obj.metadata["mboot_variables"] = [
+        {
+            "name": v.name,
+            "value": v.value,
+            "offset": v.offset,
+            "length": v.length,
+        }
+        for v in info.variables
+    ]
+    obj.metadata["mboot_variable_count"] = len(info.variables)
+
+    # Size: analyzer обчислює розмір як block_end - preamble_offset
+    obj.size = info.block_end - info.preamble_offset
