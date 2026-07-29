@@ -1,138 +1,118 @@
-# ROADMAP
-
 # MStar Analyzer Roadmap
 
-This document describes the long-term development strategy of **MStar Analyzer**.
+> Strategic roadmap for the long-term evolution of the MStar Analyzer project.
 
-Originally created for reverse engineering and analysis of **MStar firmware**, the project is gradually evolving into a modular framework capable of analyzing embedded firmware from multiple vendors and architectures while maintaining first-class support for MStar platforms.
+---
 
-Development follows functional milestones rather than fixed release dates.
+# Vision
+
+**MStar Analyzer** is being developed as a modular firmware analysis framework capable of automatically discovering, extracting, classifying and visualizing embedded firmware.
+
+Although the architecture is intentionally generic and extensible, the project currently follows a **MStar-first development strategy**.
+
+Real-world MStar firmware serves as the primary design target, while support for additional vendors is expected to evolve naturally from this foundation.
+
+The long-term objective is to create a professional reverse engineering framework for embedded firmware rather than a collection of standalone analysis scripts.
 
 ---
 
 # Current Status
 
-**Project stage**
+Current development stage:
 
-Early Alpha (v0.x)
+**Early Alpha**
 
-## Implemented
+The core architecture has largely stabilized.
 
-### Core framework
+Implemented features include:
 
 * Recursive firmware tree
-* Modular analyzer architecture
-* Detector pipeline
-* Renderer pipeline
-* Recursive object analysis
-* Firmware object classification
-* Cross-tree reporting
+* Modular extraction framework
+* Modular detector pipeline
+* Modular analyzer pipeline
+* Modular renderer pipeline
+* Runtime analysis
+* Embedded object detection
+* Library detection
+* Feature detection
+* SDK symbol profiling
+* MBoot Environment parser
+* Code Cave detection (experimental)
+* JSON export
+* Unit test suite
 
-### Extraction
+Supported compression formats:
 
-* Raw streams
+* Raw
 * GZip
 * Zlib
 * LZMA
 * XZ
 * BZip2
-* Modular extractor framework
-* Budget-aware decompression
-
-### Analysis
-
-* Runtime analyzer
-* BusyBox analyzer
-* OpenSSL analyzer
-* FFmpeg analyzer
-* SDK symbol analyzer
-* MBoot Environment parser
-* Embedded object analyzers
-
-### Detection
-
-* Library detection
-* Feature detection
-* Object detection
-* Code cave detection (experimental)
-
-### Output
-
-* Console renderer
-* JSON export
-
-### Quality
-
-* Comprehensive unit test suite
-* Regression tests
-* Modular project architecture
 
 ---
 
-# Stage 1 — Core Framework
+# Core Architecture
 
-**Goal**
+The project is organized around independent modules rather than monolithic analysis logic.
 
-Build a stable architecture that allows future development without major refactoring.
+Current architectural layers include:
 
-**Status**
+* Extractors
+* Detmectors
+* Analyzers
+* Renderers
+* Reporting
+* Firmware Tree
+* JSON Export
+* Testing
 
-Mostly complete.
+This modular design allows individual components to evolve independently while maintaining a consistent analysis pipeline.
 
-Includes
+---
 
-* Modular analyzers
-* Detector pipeline
-* Renderer pipeline
+# Development Stages
+
+## Stage 1 — Core Framework
+
+Status:
+
+**Mostly complete**
+
+Objectives:
+
+* Stable architecture
 * Recursive firmware tree
-* Modular extraction framework
-* Automated unit testing
-* JSON export
+* Modular pipelines
+* Automated testing
+* JSON reporting
 
 ---
 
-# Stage 2 — Compression Support
+## Stage 2 — Compression Support
 
-**Goal**
+Goal:
 
-Support the compression formats most commonly encountered inside embedded firmware.
+Support the majority of compression formats found inside embedded firmware.
 
-Planned
+Planned:
 
 * LZ4
-* Zstandard (Zstd)
+* Zstandard
 * LZO
 * LZOP
-* Improved multi-stream GZip
-* Improved multi-stream LZMA
+* Multi-stream GZip
+* Multi-stream LZMA
 
 ---
 
-# Stage 3 — Archive & Package Support
+## Stage 3 — Filesystem Support
 
-**Goal**
+Goal:
 
-Automatically recognize firmware packages before firmware analysis begins.
+Automatically detect and unpack embedded filesystems.
 
-Planned
-
-* ZIP
-* TAR
-* 7z
-* Vendor firmware packages
-* OTA packages
-* update.img
-* PKG containers
-
----
-
-# Stage 4 — Filesystem Support
-
-**Goal**
-
-Automatically detect, unpack and analyze embedded filesystems.
-
-Planned
+Planned:
 
 * SquashFS
 * CramFS
@@ -140,159 +120,211 @@ Planned
 * UBIFS
 * YAFFS
 * ROMFS
+* CRAMFS
 
 ---
 
-# Stage 5 — Bootloaders
+## Stage 4 — Bootloaders
 
-**Goal**
+Goal:
 
-Improve bootloader recognition and metadata extraction.
+Provide deep understanding of embedded boot environments.
 
-Planned
+Planned:
 
 * MBoot improvements
 * U-Boot
 * UImage
 * FIT Image
-* Broadcom boot formats
-* Sigma Designs boot formats
+* Vendor bootloaders
+* SPI Flash layout reconstruction
 
 ---
 
-# Stage 6 — Vendor Support
+## Stage 5 — Vendor-specific Analysis
 
-**Goal**
+Current priority:
 
-Expand firmware understanding beyond MStar while preserving MStar as the primary development target.
+**MStar firmware**
 
-Planned
+Future support:
 
-* MStar (primary focus)
 * Realtek
-* Amlogic
 * Rockchip
+* Amlogic
 * MediaTek
 * HiSilicon
+* Broadcom
+* Sigma Designs
 * Samsung
 * LG
-* Additional vendors
 
 ---
 
-# Stage 7 — Reporting
+## Stage 6 — Reverse Engineering
 
-**Goal**
+Long-term goals:
 
-Provide professional reporting capabilities.
-
-Planned
-
-* Improved JSON output
-* HTML reports
-* Better CLI output
-* Confidence visualization
-* Dependency reporting
-* Firmware summaries
+* Function discovery
+* MIPS disassembly
+* Symbol recovery
+* Call graph reconstruction
+* Cross references
+* Relocation analysis
 
 ---
 
-# Stage 8 — Extensibility
+## Stage 7 — Reporting
 
-**Goal**
+Planned outputs:
 
-Transform MStar Analyzer into an extensible analysis framework.
+* Plain text
+* JSON
+* HTML
+* Firmware comparison reports
+* Interactive dependency graphs
+* Statistical summaries
 
-Planned
+---
 
-* Plugin API
+# MStar-first Objectives
+
+Although the framework is becoming increasingly generic, several MStar-specific capabilities remain primary objectives.
+
+These include:
+
+* MBoot Environment analysis
+* eCos package inventory
+* SDK fingerprinting
+* Firmware partition reconstruction
+* Lua middleware analysis
+* Vendor-specific runtime profiling
+* SPI Flash layout analysis
+
+Completing these features represents the primary milestone before broadening development toward additional platforms.
+
+---
+
+# Framework Evolution
+
+## Plugin System
+
+Allow third-party extensions without modifying the core project.
+
+Long-term goals:
+
 * Automatic plugin discovery
-* External analyzers
-* External detectors
-* External renderers
-* Stable plugin interface
-* Versioned plugin API
+* Plugin registration
+* Vendor packages
+* Custom analyzers
+* Custom detectors
+* Custom extractors
+* Custom renderers
 
 ---
 
-# Stage 9 — Reverse Engineering
+## Input Formats
 
-**Goal**
+Current:
 
-Assist firmware reverse engineering rather than only identifying firmware contents.
+* Raw firmware images (.bin)
 
-Planned
+Planned:
+
+* ZIP archives
+* Vendor PKG packages
+* Automatic archive inspection
+* Multi-image firmware packages
+* Automatic firmware candidate selection
+
+---
+
+## Configuration System
+
+Long-term goals:
+
+* YAML signatures
+* YAML feature definitions
+* Vendor databases
+* User-defined detection rules
+* External configuration profiles
+
+---
+
+## Binary Patching Support
+
+Future capabilities:
 
 * Improved Code Cave detection
+* Executable cave verification
+* Disassembly-assisted validation
 * Optional Code Cave analysis
-* Code Cave verification
-* MIPS disassembly support
-* ARM disassembly support
-* Patch suggestion engine
-* Binary patch validation
+* Patch generation helpers
+* Patch validation
 
 ---
 
-# Stage 10 — Integration
+## Reverse Engineering Integration
 
-**Goal**
+Planned integrations:
 
-Integrate with existing reverse engineering ecosystems.
-
-Planned
-
-* Ghidra integration
-* IDA Pro integration
-* Binary Ninja integration
-* Capstone
-* Keystone
+* Ghidra
+* Binary Ninja
+* IDA (optional)
+* Export of analysis metadata
+* Automatic annotation
+* Cross-reference generation
 
 ---
 
-# Stage 11 — User Experience
+## User Interfaces
 
-**Goal**
+Future interfaces include:
 
-Improve usability without compromising the modular architecture.
-
-Planned
-
-* Graphical User Interface
-* Interactive firmware tree
-* Search
-* Filtering
-* Drag & Drop firmware loading
-* Progress reporting
+* Enhanced CLI
+* HTML Dashboard
+* Desktop GUI
+* REST API
+* Web Interface
 
 ---
 
-# Future Directions
+# Research Topics
 
-Potential long-term improvements include
+The following areas are considered long-term research directions rather than immediate implementation goals.
 
-* External signature databases (YAML / JSON)
-* Community-maintained signature packs
-* Machine-readable firmware knowledge base
-* Automatic firmware patch suggestions
-* Optional deep analysis modes
-* Performance optimizations
-* Parallel analysis pipeline
+Examples include:
 
----
-
-# Long-term Vision
-
-The long-term objective of **MStar Analyzer** is to become a modular firmware analysis framework capable of automatically discovering, extracting, classifying, analyzing and visualizing embedded firmware regardless of vendor or architecture, while continuing to provide best-in-class support for MStar-based firmware.
+* Firmware similarity analysis
+* SDK fingerprinting
+* Automatic vendor identification
+* Unknown filesystem detection
+* Firmware diff engine
+* AI-assisted firmware classification
+* Automatic vulnerability hints
+* Patch recommendation engine
+* Firmware clustering
 
 ---
 
 # Development Philosophy
 
-The project follows several core principles:
+The project follows several engineering principles.
 
 * Correctness before performance.
 * Modularity before complexity.
 * Automated tests before refactoring.
 * Incremental improvements over large rewrites.
 * Evidence-based analysis instead of assumptions.
-* Architecture should evolve slowly; capabilities should evolve continuously.
+* System-level understanding over isolated file analysis.
+* Practical usefulness over feature count.
+
+These principles guide every architectural decision made within the project.
+
+---
+
+# Long-term Vision
+
+The long-term vision is to transform MStar Analyzer into a professional firmware reverse engineering framework capable of assisting researchers, developers and security analysts in understanding complex embedded firmware across multiple vendors and architectures.
+
+The project aims to remain modular, extensible, transparent and evidence-driven while preserving its original mission of providing best-in-class analysis for MStar-based firmware.
