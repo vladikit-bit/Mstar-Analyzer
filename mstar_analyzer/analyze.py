@@ -7,7 +7,7 @@ from pathlib import Path
 import hashlib
 from .firmware_tree import FirmwareNode
 from .firmware_map import build_firmware_map
-from .extract import extract_all
+from .extractors import extract_all
 from .strings import extract_ascii_strings
 from .render import render_report
 from .json_export import build_json_report
@@ -60,6 +60,7 @@ def collect_extract_candidates(fw_map):
             "lzma-alone-header",
             "gzip",
             "xz",
+            "bzip2",
         ):
             findings.append(
                 Finding(
