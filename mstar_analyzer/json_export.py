@@ -14,10 +14,20 @@ JSON export.
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime, timezone
 from typing import Any
 
+from . import __version__ as SCANNER_VERSION
 from .firmware_tree import FirmwareNode
 from .reporting import collect_ffmpeg, collect_libpng, collect_openssl, collect_runtime
+
+# Версія САМЕ ФОРМАТУ JSON-звіту — окрема вісь від SCANNER_VERSION
+# (версії інструмента). Інструмент може випустити новий реліз, не
+# змінивши структуру звіту; а зміна структури (нове поле, перейменування,
+# інша форма "nodes") має піднімати саме цей номер, щоб зовнішні
+# споживачі (скрипти, БД, diff-тули) могли безпечно розрізняти "той
+# самий формат" від "треба оновити парсер".
+SCHEMA_VERSION = 1
 
 
 def _jsonify(value: Any) -> Any:
@@ -119,10 +129,11 @@ def _node_to_dict(node: FirmwareNode) -> dict:
     return entry
 
 
-def _tree_to_dict(node: FirmwareNode) -> dict:
+def _tree_to_dict(node: FirmwareNode, node_ids: dict[int, str]) -> dict:
 
     entry = _node_to_dict(node)
-    entry["children"] = [_tree_to_dict(child) for child in node.children]
+    entry["id"] = node_ids[id(node)]
+    entry["children"] = [_tree_to_dict(child, node_ids) for child in node.children]
 
     return entry
 
@@ -134,14 +145,31 @@ def build_json_report(root: FirmwareNode) -> dict:
 
       "tree"  — ієрархія (потрібна, щоб бачити структуру: що з чого
                 видобуто);
-      "nodes" — той самий вміст плоским словником за display_path
+      "nodes" — той самий вміст плоским словником за монотонним "id"
                 (зручніше для швидкого пошуку/lookup без обходу дерева).
+
+    Ключ "nodes" НАВМИСНО не display_path: класифікатор (classify_node)
+    призначає label за фіксованою таблицею правил ("OpenSSL library",
+    "FFmpeg module", ...), тож два РІЗНІ вузли одного дерева цілком можуть
+    отримати ІДЕНТИЧНИЙ display_path (напр. дві незалежні OpenSSL-бібліотеки,
+    розпаковані в різних гілках, — обидві "... / OpenSSL library"). Ключ за
+    display_path у такому випадку мовчки втратив би один з двох вузлів.
+    display_path лишається в кожному записі як зручне ЛЮДСЬКО-читабельне
+    поле, просто вже не є унікальним ідентифікатором.
     """
+
+    node_ids: dict[int, str] = {
+        id(node): f"n{index}"
+        for index, node in enumerate(root.walk())
+    }
 
     nodes: dict[str, dict] = {}
 
     for node in root.walk():
-        nodes[node.display_path] = _node_to_dict(node)
+        node_id = node_ids[id(node)]
+        entry = _node_to_dict(node)
+        entry["id"] = node_id
+        nodes[node_id] = entry
 
     runtime = collect_runtime(root)
     openssl = collect_openssl(root)
@@ -149,11 +177,14 @@ def build_json_report(root: FirmwareNode) -> dict:
     libpng = collect_libpng(root)
 
     return {
+        "schema_version": SCHEMA_VERSION,
+        "scanner_version": SCANNER_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "firmware": {
             "name": root.name,
             "size": root.size,
         },
-        "tree": _tree_to_dict(root),
+        "tree": _tree_to_dict(root, node_ids),
         "nodes": nodes,
         "cross_tree_summary": {
             "runtime": _jsonify(runtime) if runtime is not None else None,

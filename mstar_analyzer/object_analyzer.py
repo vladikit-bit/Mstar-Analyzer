@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import struct
 
@@ -466,9 +467,26 @@ def analyze_jpeg(
 # ============================================================================
 #
 # Формат заголовка (lundump.h) однаковий за компонуванням для Lua
-# 5.1 / 5.2 / 5.3 (12 байт): сигнатура(4) + version(1) + format(1) +
+# 5.1 / 5.2 / 5.3 / 5.4 (12 байт): сигнатура(4) + version(1) + format(1) +
 # endianness(1) + size_int(1) + size_size_t(1) + size_Instruction(1) +
 # size_lua_Number(1) + integral_flag(1).
+#
+# Lua 5.0 (перевірено за реальним джерелом: lua.org/source/5.0/lundump.c.html,
+# функція LoadHeader) використовує ІНШУ розкладку — байта LUAC_FORMAT ще не
+# існувало (з'явився лише в 5.1), а замість фінального однобайтного
+# "integral_flag" на диск пишеться РЕАЛЬНЕ число TEST_NUMBER (кратне π,
+# sizeof(lua_Number) байт), яке приймаюча сторона звіряє під час
+# завантаження. Крім того, одразу за розмірами int/size_t/Instruction йдуть
+# чотири додаткові байти — розрядність полів опкоду SIZE_OP/SIZE_A/SIZE_B/
+# SIZE_C, — яких у 5.1+ вже немає:
+#
+#   сигнатура(4) + version(1) + endianness(1) + size_int(1) +
+#   size_size_t(1) + size_Instruction(1) + size_OP(1) + size_A(1) +
+#   size_B(1) + size_C(1) + size_lua_Number(1) + TEST_NUMBER(size_lua_Number)
+#
+# Раніше файли з version=0x50 завжди розбирались за 5.1-розкладкою і
+# практично гарантовано провалювали перевірку полів — тобто "implausible_
+# header_fields" на СПРАВЖНІХ Lua 5.0 чанках, а не лише на випадковому шумі.
 #
 # Повне розбирання тіла (константи, вкладені прототипи, debug-інфо)
 # свідомо НЕ реалізоване — це окремий, набагато більший модуль
@@ -487,6 +505,10 @@ LUA_VERSION_NAMES = {
 }
 
 LUA_HEADER_SIZE = 12
+
+# Lua 5.0-специфічні константи (lundump.h 5.0.3).
+LUA50_HEADER_FIXED = 14  # усе, ОКРІМ завершального TEST_NUMBER
+LUA50_TEST_NUMBER = 3.14159265358979323846E7  # "a multiple of PI" (lundump.h)
 
 
 def _read_lua_chunk_name(
@@ -521,6 +543,164 @@ def _read_lua_chunk_name(
     return text
 
 
+def _lua50_test_number_matches(
+    raw: bytes,
+    size_number: int,
+    little_endian: bool,
+) -> bool:
+    """
+    lundump.c 5.0.3 LoadHeader звіряє лише ЦІЛУ частину прочитаного числа з
+    TEST_NUMBER (`if ((long)x != (long)tx) ... "unknown number format"`) —
+    дробову частину відкидає. Повторюємо ту саму логіку: int() у Python
+    truncatе до нуля так само, як (long) у C для додатних чисел, а
+    TEST_NUMBER додатний.
+
+    raw — довільні байти з прошивки, не гарантовано валідне число: окремі
+    бітові комбінації декодуються як NaN/Inf, а int(nan)/int(inf) кидають
+    ValueError/OverflowError (не struct.error!). analyze_objects() не має
+    try/except навколо окремих аналізаторів, тож необроблений виняток тут
+    завалив би аналіз усієї прошивки, а не лише позначив один об'єкт як
+    невалідний — тому ловимо їх явно.
+    """
+
+    if size_number == 4:
+        fmt = "<f" if little_endian else ">f"
+    elif size_number == 8:
+        fmt = "<d" if little_endian else ">d"
+    else:
+        return False
+
+    if len(raw) < size_number:
+        return False
+
+    try:
+        (value,) = struct.unpack(fmt, raw[:size_number])
+
+        if not math.isfinite(value):
+            return False
+
+        return int(value) == int(LUA50_TEST_NUMBER)
+
+    except (struct.error, ValueError, OverflowError):
+        return False
+
+
+def _analyze_lua_5_0(
+    obj: EmbeddedObject,
+    data: bytes,
+    pos: int,
+) -> None:
+    """
+    Окрема гілка для version byte 0x50 — заголовок Lua 5.0 НЕ сумісний за
+    розкладкою з 5.1+ (див. коментар над LUA_VERSION_NAMES). Навмисно
+    дзеркалить структуру analyze_lua() (список issues, ті самі ключі
+    metadata там, де є прямий відповідник — reason/header_issues/note),
+    щоб рендерер і JSON-export не потребували спеціальних гілок під
+    конкретну версію Lua.
+    """
+
+    fixed = data[pos:pos + LUA50_HEADER_FIXED]
+
+    if len(fixed) < LUA50_HEADER_FIXED:
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "truncated_header"
+        return
+
+    endianness = fixed[5]
+    size_int = fixed[6]
+    size_size_t = fixed[7]
+    size_instruction = fixed[8]
+    size_op = fixed[9]
+    size_a = fixed[10]
+    size_b = fixed[11]
+    size_c = fixed[12]
+    size_number = fixed[13]
+
+    obj.metadata.update(
+        {
+            "endianness_raw": endianness,
+            "size_int": size_int,
+            "size_size_t": size_size_t,
+            "size_instruction": size_instruction,
+            "size_op_bits": size_op,
+            "size_a_bits": size_a,
+            "size_b_bits": size_b,
+            "size_c_bits": size_c,
+            "size_number": size_number,
+        }
+    )
+
+    issues: list[str] = []
+
+    if endianness not in (0, 1):
+        issues.append(f"endianness byte 0x{endianness:02X} (очікується 0x00 або 0x01)")
+
+    if size_int not in (2, 4, 8):
+        issues.append(f"size_int={size_int} (очікується 2, 4 або 8)")
+
+    if size_size_t not in (4, 8):
+        issues.append(f"size_size_t={size_size_t} (очікується 4 або 8)")
+
+    if size_instruction not in (4, 8):
+        issues.append(f"size_instruction={size_instruction} (очікується 4 або 8)")
+
+    if size_number not in (4, 8):
+        issues.append(f"size_number={size_number} (очікується 4 або 8)")
+
+    # Розрядність полів опкоду (SIZE_OP/A/B/C) сама по собі довільна —
+    # залежить від lopcodes.h конкретної збірки, тож не звіряємо з
+    # фіксованими "стандартними" 6/8/9/9. Натомість вимагаємо структурної
+    # узгодженості: OP+A+B+C мають РІВНО заповнювати Instruction
+    # (size_instruction*8 біт) — перевіряємо лише якщо size_instruction
+    # сам по собі вже правдоподібний.
+    if size_instruction in (4, 8):
+        total_bits = size_op + size_a + size_b + size_c
+        expected_bits = size_instruction * 8
+
+        if 0 in (size_op, size_a, size_b, size_c) or total_bits != expected_bits:
+            issues.append(
+                f"OP/A/B/C bit widths {size_op}+{size_a}+{size_b}+{size_c}="
+                f"{total_bits} не заповнюють Instruction ({expected_bits} біт)"
+            )
+
+    if size_number in (4, 8):
+        raw_number = data[pos + LUA50_HEADER_FIXED: pos + LUA50_HEADER_FIXED + size_number]
+
+        if len(raw_number) < size_number:
+            issues.append("TEST_NUMBER: недостатньо даних для перевірки")
+        elif not _lua50_test_number_matches(raw_number, size_number, little_endian=(endianness == 1)):
+            issues.append(
+                "TEST_NUMBER не збігається з очікуваним π·10⁷ "
+                "(зіпсований заголовок або нестандартний числовий формат)"
+            )
+
+    if issues:
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "implausible_header_fields"
+        obj.metadata["header_issues"] = issues
+        obj.metadata["note"] = (
+            "версія в заголовку впізнавана (Lua 5.0, version byte 0x50) —"
+            " сигнатура, ймовірно, не випадкова, але формат тіла"
+            " нестандартний (кастомний/патчений дампер, зсув заголовка,"
+            " або справді пошкоджені дані)"
+        )
+        return
+
+    obj.metadata["endianness"] = "little" if endianness == 1 else "big"
+
+    chunk_name = _read_lua_chunk_name(
+        data,
+        pos + LUA50_HEADER_FIXED + size_number,
+        size_size_t,
+        little_endian=(endianness == 1),
+    )
+
+    if chunk_name:
+        obj.metadata["chunk_name"] = chunk_name
+
+
 def analyze_lua(
     obj: EmbeddedObject,
     data: bytes,
@@ -544,6 +724,13 @@ def analyze_lua(
         version_byte,
         f"unknown (0x{version_byte:02X})",
     )
+
+    if version_byte == 0x50:
+        # Lua 5.0 має несумісну з 5.1+ розкладку заголовка — окрема гілка
+        # замість спроби впхнути в поля нижче (детальніше в коментарі над
+        # LUA_VERSION_NAMES).
+        _analyze_lua_5_0(obj, data, pos)
+        return
 
     fmt = header[5]
     endianness = header[6]

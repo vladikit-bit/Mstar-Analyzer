@@ -11,6 +11,7 @@ from ..reporting import (
     collect_runtime,
 )
 from ..firmware_tree import FirmwareNode
+from .runtime import render_ecos_packages
 
 
 def render_cross_tree_summary(root: FirmwareNode) -> None:
@@ -68,6 +69,8 @@ def _render_runtime(summary: RuntimeSummary) -> None:
         if summary.libc_package_versions:
             line += " (package " + ", ".join(sorted(summary.libc_package_versions)) + ")"
         print(line)
+
+    render_ecos_packages(summary.ecos_packages)
 
     for path in summary.nodes:
         print(f"    {path}")

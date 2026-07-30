@@ -10,7 +10,6 @@ from .gzip import GZipExtractor
 from .xz import XZExtractor
 from .zlib import ZlibExtractor
 from .bzip2 import BZip2Extractor
-from .raw import RawExtractor
 from .factory import ExtractorFactory, DEFAULT_FACTORY
 from .pipeline import Candidate, build_candidates, extract_all
 
@@ -25,7 +24,6 @@ __all__ = [
     "XZExtractor",
     "ZlibExtractor",
     "BZip2Extractor",
-    "RawExtractor",
     "ExtractorFactory",
     "DEFAULT_FACTORY",
     "Candidate",

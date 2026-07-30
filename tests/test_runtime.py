@@ -64,5 +64,63 @@ class ArchitectureFalsePositiveTests(unittest.TestCase):
         self.assertEqual(info.architecture, "PowerPC")
 
 
+class EcosPackageInventoryTests(unittest.TestCase):
+    """
+    libc_package_versions (плаский набір "2.0.60") існував і раніше, але
+    приховував, з ЯКИХ САМЕ пакетів SDK він зібраний — різні пакети
+    одного релізу технічно можуть розходитись за версією. ecos_packages
+    (ім'я пакета -> набір версій) — саме той інвентар, а не лише число.
+    """
+
+    def test_multiple_packages_captured_with_names(self):
+        strings = [
+            _finding("/home/tao.yang/ecos_os/stb_ecospro/packages/io/serial/v2_0_60/src/common/serial.c"),
+            _finding("/home/tao.yang/ecos_os/stb_ecospro/packages/services/memalloc/common/v2_0_60/src/malloc.cxx"),
+            _finding("/home/tao.yang/ecos_os/stb_ecospro/packages/fs/fat/v2_0_60/src/fatfs_supp.c"),
+            _finding("/home/tao.yang/ecos_os/stb_ecospro/packages/io/fileio/v2_0_60/src/misc.cxx"),
+        ]
+        info = analyze_runtime(strings)
+        self.assertIsNotNone(info)
+        self.assertEqual(
+            info.ecos_packages,
+            {
+                "io/serial": {"2.0.60"},
+                "services/memalloc/common": {"2.0.60"},
+                "fs/fat": {"2.0.60"},
+                "io/fileio": {"2.0.60"},
+            },
+        )
+        # Стара плоска форма й далі має заповнюватись — зворотна сумісність.
+        self.assertEqual(info.libc_package_versions, {"2.0.60"})
+
+    def test_package_with_disagreeing_versions(self):
+        strings = [
+            _finding("/ecos_os/stb_ecospro/packages/io/serial/v2_0_60/src/serial.c"),
+            _finding("/ecos_os/stb_ecospro/packages/io/serial/v2_0_61/src/serial.c"),
+        ]
+        info = analyze_runtime(strings)
+        self.assertIsNotNone(info)
+        self.assertEqual(info.ecos_packages["io/serial"], {"2.0.60", "2.0.61"})
+
+    def test_vN_N_N_without_packages_prefix_not_captured_as_named_package(self):
+        # ECOS_PACKAGE_NAME_RE навмисно строгіший за ECOS_PACKAGE_VERSION_RE
+        # (вимагає літеральне "packages/") — інакше легко зачепити чужий
+        # "vN_N_N"-каталог без стосунку до eCos package tree.
+        strings = [
+            _finding("ecos_os some/random/v2_0_60/path/not_a_real_package_tree"),
+        ]
+        info = analyze_runtime(strings)
+        self.assertIsNotNone(info)
+        self.assertEqual(info.ecos_packages, {})
+        # Стара (менш строга) форма й далі це ловить — поведінка не регресувала.
+        self.assertEqual(info.libc_package_versions, {"2.0.60"})
+
+    def test_no_ecos_strings_gives_empty_dict(self):
+        strings = [_finding("mipsisa32-elf-gcc -mips16 -EL -D ECOS_OS")]
+        info = analyze_runtime(strings)
+        self.assertIsNotNone(info)
+        self.assertEqual(info.ecos_packages, {})
+
+
 if __name__ == "__main__":
     unittest.main()

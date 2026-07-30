@@ -59,3 +59,5 @@ Rendering modules are responsible only for presentation.
 The framework is designed to be extensible by simply adding
 new analyzers without modifying the analysis pipeline.
 """
+
+__version__ = "0.1.0"  # Early Alpha (v0.x) — тримати синхронним з Readme.md

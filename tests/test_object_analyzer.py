@@ -113,8 +113,129 @@ class LuaTests(unittest.TestCase):
         self.assertIn("header_issues", obj.metadata)
         self.assertGreater(len(obj.metadata["header_issues"]), 0)
         # version-байт 0x50 — реальна історична версія Lua 5.0, тож
-        # мусить бути окрема примітка про це.
+        # мусить бути окрема примітка про це — навіть при повністю
+        # сміттєвих полях (це саме шлях _analyze_lua_5_0, а не 5.1+).
         self.assertIn("note", obj.metadata)
+
+
+class Lua50HeaderTests(unittest.TestCase):
+    """
+    Lua 5.0 (lundump.h/lundump.c 5.0.3, перевірено за lua.org/source/5.0/)
+    має ІНШУ розкладку заголовка за 5.1+: без окремого байта LUAC_FORMAT,
+    з чотирма додатковими байтами SIZE_OP/A/B/C, і завершується не одним
+    "integral_flag" байтом, а РЕАЛЬНИМ числом TEST_NUMBER (кратним π).
+    Раніше версія 0x50 завжди йшла через 5.1-парсер і практично гарантовано
+    провалювала перевірку навіть на СПРАВЖНІХ Lua 5.0 чанках.
+    """
+
+    @staticmethod
+    def _build_50_header(*, little_endian: bool, size_number: int = 8,
+                          size_op=6, size_a=8, size_b=9, size_c=9,
+                          test_number: float | None = None) -> bytes:
+
+        order = "<" if little_endian else ">"
+
+        if test_number is None:
+            test_number = 3.14159265358979323846E7
+
+        num_fmt = "f" if size_number == 4 else "d"
+
+        return (
+            b"\x1bLua"
+            + bytes([0x50])
+            + bytes([1 if little_endian else 0])
+            + bytes([4, 4, 4])  # size_int, size_size_t, size_instruction
+            + bytes([size_op, size_a, size_b, size_c])
+            + bytes([size_number])
+            + struct.pack(f"{order}{num_fmt}", test_number)
+        )
+
+    def test_valid_lua_50_header_little_endian(self):
+        header = self._build_50_header(little_endian=True)
+        obj = EmbeddedObject(offset=0, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        analyze_lua(obj, header + b"\x00" * 20)
+        self.assertTrue(obj.validated)
+        self.assertEqual(obj.metadata["lua_version"], "5.0")
+        self.assertEqual(obj.metadata["endianness"], "little")
+
+    def test_valid_lua_50_header_big_endian(self):
+        header = self._build_50_header(little_endian=False)
+        obj = EmbeddedObject(offset=0, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        analyze_lua(obj, header + b"\x00" * 20)
+        self.assertTrue(obj.validated)
+        self.assertEqual(obj.metadata["endianness"], "big")
+
+    def test_valid_lua_50_header_extracts_chunk_name(self):
+        header = self._build_50_header(little_endian=True)
+        chunk = b"@menu/main.lua\x00"
+        chunk_block = struct.pack("<I", len(chunk)) + chunk
+        obj = EmbeddedObject(offset=0, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        analyze_lua(obj, header + chunk_block + b"\x00" * 20)
+        self.assertTrue(obj.validated)
+        self.assertEqual(obj.metadata["chunk_name"], "@menu/main.lua")
+
+    def test_valid_lua_50_header_at_nonzero_offset(self):
+        header = self._build_50_header(little_endian=True)
+        data = b"\xAB" * 37 + header + b"\x00" * 20
+        obj = EmbeddedObject(offset=37, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        analyze_lua(obj, data)
+        self.assertTrue(obj.validated)
+
+    def test_wrong_test_number_is_rejected(self):
+        # Структурно правдоподібний заголовок (усі розміри в допустимих
+        # межах, OP+A+B+C=32=size_instruction*8), але TEST_NUMBER не
+        # відповідає π·10⁷ — це має провалити перевірку, а не пройти
+        # лише тому, що байти розмірів виглядають ОК.
+        header = self._build_50_header(little_endian=True, test_number=123456.0)
+        obj = EmbeddedObject(offset=0, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        analyze_lua(obj, header + b"\x00" * 20)
+        self.assertFalse(obj.validated)
+        self.assertIn("header_issues", obj.metadata)
+        self.assertTrue(any("TEST_NUMBER" in issue for issue in obj.metadata["header_issues"]))
+
+    def test_inconsistent_opcode_bit_widths_rejected(self):
+        # OP+A+B+C=31, size_instruction=4 (=32 біт очікується) — не сходиться.
+        header = self._build_50_header(little_endian=True, size_op=6, size_a=8, size_b=8, size_c=9)
+        obj = EmbeddedObject(offset=0, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        analyze_lua(obj, header + b"\x00" * 20)
+        self.assertFalse(obj.validated)
+        self.assertTrue(any("OP/A/B/C" in issue for issue in obj.metadata["header_issues"]))
+
+    def test_51_header_still_uses_old_layout_not_50_path(self):
+        # Регресія: переконатись, що диспетчеризація за version_byte==0x50
+        # не зачепила існуючий 5.1-шлях.
+        header = b"\x1bLua" + bytes([0x51, 0x00, 0x00, 0x04, 0x08, 0x04, 0x08, 0x00])
+        obj = EmbeddedObject(offset=0, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        analyze_lua(obj, header + b"\x00" * 20)
+        self.assertTrue(obj.validated)
+        self.assertEqual(obj.metadata["lua_version"], "5.1")
+        self.assertNotIn("size_op_bits", obj.metadata)  # 5.0-специфічне поле не мало б з'явитись
+
+    def test_nan_test_number_bytes_do_not_crash(self):
+        # 0x7FF8000000000000 (little-endian double) декодується як NaN.
+        # int(nan) кидає ValueError, а не struct.error — без явного
+        # перехоплення це впало б необробленим винятком і зупинило б
+        # аналіз усієї прошивки (analyze_objects не має try/except
+        # навколо окремих аналізаторів).
+        nan_bytes = bytes.fromhex("000000000000f87f")  # little-endian double NaN
+        header = self._build_50_header(little_endian=True)[:-8] + nan_bytes
+        obj = EmbeddedObject(offset=0, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        try:
+            analyze_lua(obj, header + b"\x00" * 20)
+        except (ValueError, OverflowError) as exc:
+            self.fail(f"analyze_lua crashed on NaN TEST_NUMBER bytes: {exc!r}")
+        self.assertFalse(obj.validated)
+        self.assertTrue(any("TEST_NUMBER" in issue for issue in obj.metadata["header_issues"]))
+
+    def test_inf_test_number_bytes_do_not_crash(self):
+        inf_bytes = bytes.fromhex("000000000000f07f")  # little-endian double +Inf
+        header = self._build_50_header(little_endian=True)[:-8] + inf_bytes
+        obj = EmbeddedObject(offset=0, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
+        try:
+            analyze_lua(obj, header + b"\x00" * 20)
+        except (ValueError, OverflowError) as exc:
+            self.fail(f"analyze_lua crashed on Inf TEST_NUMBER bytes: {exc!r}")
+        self.assertFalse(obj.validated)
 
 
 # ============================================================================

@@ -131,6 +131,7 @@ class RuntimeSummary:
 
     libc: str | None = None
     libc_package_versions: set[str] = field(default_factory=set)
+    ecos_packages: dict[str, set[str]] = field(default_factory=dict)
     architecture: str | None = None
     compiler: str | None = None
     nodes: list[str] = field(default_factory=list)
@@ -151,6 +152,9 @@ def collect_runtime(root: FirmwareNode) -> RuntimeSummary | None:
             summary.libc = info.libc
 
         summary.libc_package_versions.update(info.libc_package_versions)
+
+        for pkg_name, versions in info.ecos_packages.items():
+            summary.ecos_packages.setdefault(pkg_name, set()).update(versions)
 
         if summary.architecture is None and info.architecture:
             summary.architecture = info.architecture

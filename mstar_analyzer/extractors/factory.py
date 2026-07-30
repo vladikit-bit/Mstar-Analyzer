@@ -21,6 +21,20 @@ _EXTRACTOR_BY_NAME: dict[str, type[Extractor]] = {
     "bzip2": BZip2Extractor,
 }
 
+# НЕ додавайте сюди generic "raw"-фолбек за замовчуванням. Раніше в
+# проєкті був RawExtractor, зареєстрований лише "про запас" і фактично
+# ніколи не використовувався — жодного Finding.name, що потребував би
+# такого фолбека (напр. LZO), Stage 2 ще не породжує. А `Finding` тут —
+# це НЕ лише кандидати на розпакування: MagicScanner так само віддає
+# "PNG"/"JPEG"/"ELF"/"UBI#"/"SquashFS (LE)"/"cramfs"/"DTB", а
+# AsciiMarkerScanner — десятки "marker:*" на кожен збіг. Generic
+# фолбек тут почав би "розпаковувати" (сирим копіюванням) геть усе це
+# теж — PNG/ELF мають власний, набагато кращий шлях аналізу через
+# object_analyzer, а не мають дублюватись сюди. Коли з'явиться реальний
+# Finding без stdlib-декомпресора (LZO), заводьте extractor і
+# реєструйте його явно під ТОЧНЕ ім'я цього Finding — так само, як
+# зроблено для решти записів у цьому словнику.
+
 
 class ExtractorFactory:
     """Реєстр Finding.name -> Extractor. Нові методи додаються через register(), pipeline не міняється."""

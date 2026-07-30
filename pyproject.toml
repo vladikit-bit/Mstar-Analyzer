@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mstar-analyzer"
+version = "0.1.0"
+description = "Modular firmware analysis framework for MStar/embedded Set-Top-Box and OTT device firmware."
+readme = "Readme.md"
+requires-python = ">=3.10"
+license = { text = "License information will be added in a future release." }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "Topic :: System :: Recovery Tools",
+    "Programming Language :: Python :: 3",
+]
+# Проєкт свідомо не має third-party runtime-залежностей — Roadmap.md /
+# Readme.md принцип "Modularity before complexity": увесь Stage 2/5
+# (детекція + розпакування) навмисно побудований лише на stdlib
+# (re, struct, lzma, zlib, bz2, dataclasses), без binwalk/7z у PATH.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+mstar-analyzer = "mstar_analyzer.analyze:main"
+
+[tool.setuptools.packages.find]
+include = ["mstar_analyzer*"]

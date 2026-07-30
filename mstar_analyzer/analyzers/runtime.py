@@ -128,6 +128,17 @@ LIBC_SIGNATURES = (
 # тож зібраний набір по суті і є версією "покоління" пакетів SDK.
 ECOS_PACKAGE_VERSION_RE = re.compile(r"/v(\d+)_(\d+)_(\d+)/")
 
+# Той самий "vN_N_N" маркер, але разом з ІМ'ЯМ пакета, що йде одразу
+# після "packages/" і до самого маркера версії (напр. "io/serial" або
+# "services/memalloc/common" — кількість вкладених сегментів різна,
+# тому не-жадібний повтор "+?", а не фіксована кількість "/"-груп).
+# Вимога літерального "packages/" на початку — свідомо СТРОГІША за
+# ECOS_PACKAGE_VERSION_RE вище (і не замінює її — та лишається для
+# зворотної сумісності libc_package_versions): без цього префікса
+# легко зачепити чужий "vN_N_N" каталог, що не має стосунку до
+# eCos package tree взагалі.
+ECOS_PACKAGE_NAME_RE = re.compile(r"packages/((?:[A-Za-z0-9_.\-]+/)+?)v(\d+)_(\d+)_(\d+)/")
+
 # Скільки evidence-рядків тримати на категорію. Один configure-рядок на
 # кілька тисяч символів (типовий випадок для FFmpeg build flags) інакше
 # дублюється одразу в 4 секціях (compiler/architecture/endian/libc) і
@@ -178,6 +189,12 @@ class RuntimeInfo:
     # версії), тому зберігаємо як множину спостережень, а не єдине
     # значення.
     libc_package_versions: set[str] = field(default_factory=set)
+
+    # Те саме, але з ІМЕНЕМ пакета: "io/serial" -> {"2.0.60"}. На відміну
+    # від libc_package_versions (плаский набір версій без прив'язки до
+    # пакета), тут видно САМЕ ЯКІ пакети SDK використовуються — а не лише
+    # якийсь один номер версії, що приблизно збігається для всіх.
+    ecos_packages: dict[str, set[str]] = field(default_factory=dict)
 
 
 def analyze_runtime(
@@ -265,6 +282,11 @@ def analyze_runtime(
 
                 for major, minor, patch in ECOS_PACKAGE_VERSION_RE.findall(s.text):
                     info.libc_package_versions.add(f"{major}.{minor}.{patch}")
+
+                for pkg_path, major, minor, patch in ECOS_PACKAGE_NAME_RE.findall(s.text):
+                    pkg_name = pkg_path.rstrip("/")
+                    version = f"{major}.{minor}.{patch}"
+                    info.ecos_packages.setdefault(pkg_name, set()).add(version)
 
                 break
 

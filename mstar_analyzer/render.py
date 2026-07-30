@@ -213,6 +213,20 @@ def render_node_code_caves(node: FirmwareNode) -> None:
         )
 
 
+# Феча — це сукупний score з УСІХ сигнатур, що збіглися під цим іменем
+# (детально: detectors/features.py Feature.score / score_to_confidence),
+# тож "✓" однаковий і для 5-очкового поодинокого слабкого патерна
+# ("eygp3-ge" -> Graphics Engine WEAK), і для 100+-очкового підтвердженого
+# (MDrv_GE_*) виглядало як однаково надійний доказ. Три різні маркери
+# замість одного "✓" — щоб різницю між "вартий довіри" і "варто
+# перевірити вручну" було видно з першого погляду, без походу у JSON.
+_FEATURE_CONFIDENCE_MARKER = {
+    "HIGH": "✓",
+    "MEDIUM": "~",
+    "LOW": "?",
+}
+
+
 def render_node_features(node: FirmwareNode) -> None:
 
     if not node.features:
@@ -224,7 +238,9 @@ def render_node_features(node: FirmwareNode) -> None:
 
     for feature in node.features:
 
-        print(f"✓ {feature.name}")
+        marker = _FEATURE_CONFIDENCE_MARKER.get(feature.confidence, "?")
+
+        print(f"{marker} {feature.name}  [{feature.confidence}, score={feature.score}]")
         print(f"    evidence: {feature.evidence}")
 
 
