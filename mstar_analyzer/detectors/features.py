@@ -158,8 +158,18 @@ SIGNATURES: list[Signature] = [
     ),
 
     Signature(
+        # Негативний lookbehind навмисно виключає "--enable-openssl" /
+        # "--disable-openssl" — реальний рядок з прошивки містить
+        # вбудований рядок конфігурації збірки FFmpeg
+        # ("--disable-protocols --enable-openssl --enable-protocol=..."),
+        # де "openssl" — це прапорець збірки FFmpeg (TLS-бекенд), а не
+        # самостійний доказ окремої бібліотеки OpenSSL. Це вже точніше
+        # й окремо фіксується в FFmpegSummary.uses_openssl (reporting.py)
+        # — справжні шляхи пакета openssl (".../packages/net/openssl/
+        # v_0_9_8o/...") тут НЕ постраждають, бо перед "openssl" там
+        # "net/", а не "enable-"/"disable-".
         feature="OpenSSL",
-        pattern=re.compile(r"\bopenssl\b", re.I),
+        pattern=re.compile(r"(?<!enable-)(?<!disable-)\bopenssl\b", re.I),
         weight=50,
     ),
 
@@ -367,6 +377,20 @@ def score_to_confidence(score: int) -> str:
     return "LOW"
 
 
+# Візуальне представлення трьох рівнів score_to_confidence вище —
+# спільне для render.py (per-node "Detected features") і
+# renderers/summary.py (крос-дерева "Capabilities"), тому живе тут, а
+# не в жодному з них: render.py вже імпортує з renderers/summary.py
+# (render_cross_tree_summary), тож розміщення цієї мапи в render.py
+# створило б циклічний імпорт, якби renderers/summary.py теж захотів
+# її звідти імпортувати.
+FEATURE_CONFIDENCE_MARKER = {
+    "HIGH": "✓",
+    "MEDIUM": "~",
+    "LOW": "?",
+}
+
+
 def detect_features(strings: Iterable[StringFinding]) -> list[Feature]:
 
     found: dict[str, Feature] = {}
@@ -425,3 +449,52 @@ def detect_features(strings: Iterable[StringFinding]) -> list[Feature]:
     key=lambda f: f.score,
     reverse=True,
 )
+
+
+# Групування Feature.name за категорією — для "Capabilities" зведення
+# (renderers/summary.py). Навмисно окремий словник, а не поле на
+# Signature: одна й та сама feature ("H.264 decoder") часто має кілька
+# Signature-записів (weak/strong), а категорія в неї рівно одна.
+# Якщо колись з'явиться нова feature без запису тут — вона просто
+# потрапить під "Інше" (render_capabilities), а не впаде з KeyError.
+FEATURE_CATEGORIES: dict[str, str] = {
+    "Wi-Fi": "Networking",
+    "Ethernet": "Networking",
+    "HTTP client": "Networking",
+    "SSL/TLS": "Networking",
+    "OpenSSL": "Networking",
+    "Streaming Engine": "Networking",
+    "HLS Streaming": "Networking",
+    "NetSrv: Download Module": "Networking",
+    "NetSrv: Buffering": "Networking",
+    "NetSrv: Client session": "Networking",
+
+    "H.264 decoder": "Codecs",
+    "H.265 decoder": "Codecs",
+    "MPEG codec": "Codecs",
+    "JPEG support": "Codecs",
+    "PNG support": "Codecs",
+    "DivX": "Codecs",
+    "FFmpeg": "Codecs",
+    "FFmpeg AVIO": "Codecs",
+
+    "Graphics Engine": "Graphics",
+    "Graphics Output Processor": "Graphics",
+    "LCD Panel": "Graphics",
+
+    "Audio subsystem": "Audio",
+    "Dolby": "Audio",
+
+    "Memory controller": "System",
+    "MStar Bootloader": "System",
+    "MStar SDK": "System",
+    "Dynamic ELF loader (Objloader)": "System",
+    "Lua scripting": "System",
+    "SQLite": "System",
+    "Video subsystem": "System",
+}
+
+# Порядок показу категорій у render_capabilities (renderers/summary.py) —
+# фіксований, а не алфавітний, щоб звіт читався в передбачуваному
+# порядку від зовнішнього (мережа) до внутрішнього (система).
+FEATURE_CATEGORY_ORDER = ["Networking", "Codecs", "Graphics", "Audio", "System", "Other"]

@@ -17,12 +17,11 @@ from mstar_analyzer.analyzers.mboot_env import (
     MBootEnvBlockInfo,
     _find_preamble_start,
     _extract_version_string,
-    _skip_ff_padding,
     _extract_env_variables,
     parse_mboot_env_block,
     compute_confidence,
 )
-from mstar_analyzer.detectors.objects import detect_mboot_env_block, EmbeddedObject
+from mstar_analyzer.detectors.objects import detect_mboot_env_block
 from mstar_analyzer.object_analyzer import analyze_mboot_env_block
 
 

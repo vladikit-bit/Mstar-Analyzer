@@ -216,10 +216,50 @@ def detect_mboot_env_block(data: bytes) -> list[EmbeddedObject]:
     return objects
 
 
+DTB_SIGNATURE = b"\xd0\x0d\xfe\xed"
+
+
+def detect_dtb(data: bytes) -> list[EmbeddedObject]:
+    """
+    Пошук Flattened Device Tree (сигнатура 0xD00DFEED, big-endian,
+    Devicetree Specification §5.2). Той самий magic вже фігурував у
+    Stage 2 MagicScanner (signatures.py) як плоский Finding — тут він
+    стає повноцінним EmbeddedObject з подальшим структурним розбором
+    заголовка через object_analyzer.analyze_dtb() (за тим самим
+    принципом, що ELF/Lua/MBoot вище: детектор лише фіксує кандидата
+    за magic bytes, глибоку валідацію виконує окрема функція).
+    """
+
+    objects: list[EmbeddedObject] = []
+
+    pos = 0
+
+    while True:
+
+        pos = data.find(DTB_SIGNATURE, pos)
+
+        if pos == -1:
+            break
+
+        objects.append(
+            EmbeddedObject(
+                offset=pos,
+                size=None,
+                kind="DTB",
+                description="Flattened Device Tree",
+            )
+        )
+
+        pos += 4
+
+    return objects
+
+
 DETECTORS = (
     detect_png,
     detect_jpeg,
     detect_lua_bytecode,
     detect_elf,
     detect_mboot_env_block,
+    detect_dtb,
 )

@@ -53,6 +53,12 @@ The project is under active development.
 
 Architectural changes are becoming less frequent, while new firmware analysis capabilities are continuously being added.
 
+Latest additions:
+- Codec table analysis
+- Improved feature confidence model
+- Human-readable metadata rendering
+- Extended regression testing
+
 ---
 
 ## Project Principles

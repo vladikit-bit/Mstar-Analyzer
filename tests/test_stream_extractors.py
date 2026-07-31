@@ -107,7 +107,7 @@ class TestDecPending(unittest.TestCase):
         big = lzma.compress(b"B" * 50_000, format=lzma.FORMAT_XZ)
         dec = lzma.LZMADecompressor(format=lzma.FORMAT_XZ)
         # Маленький budget → декомпресор має внутрішній буфер
-        out = dec.decompress(big, 1)
+        _ = dec.decompress(big, 1)
         if not dec.needs_input and not dec.eof:
             result = _dec_pending(dec)
             self.assertIsNotNone(result)

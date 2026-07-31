@@ -19,7 +19,7 @@ from typing import Any
 
 from . import __version__ as SCANNER_VERSION
 from .firmware_tree import FirmwareNode
-from .reporting import collect_ffmpeg, collect_libpng, collect_openssl, collect_runtime
+from .reporting import collect_capabilities, collect_ffmpeg, collect_libpng, collect_openssl, collect_runtime
 
 # Версія САМЕ ФОРМАТУ JSON-звіту — окрема вісь від SCANNER_VERSION
 # (версії інструмента). Інструмент може випустити новий реліз, не
@@ -172,6 +172,7 @@ def build_json_report(root: FirmwareNode) -> dict:
         nodes[node_id] = entry
 
     runtime = collect_runtime(root)
+    capabilities = collect_capabilities(root)
     openssl = collect_openssl(root)
     ffmpeg = collect_ffmpeg(root)
     libpng = collect_libpng(root)
@@ -188,6 +189,7 @@ def build_json_report(root: FirmwareNode) -> dict:
         "nodes": nodes,
         "cross_tree_summary": {
             "runtime": _jsonify(runtime) if runtime is not None else None,
+            "capabilities": _jsonify(capabilities) if capabilities is not None else None,
             "openssl": _jsonify(openssl) if openssl is not None else None,
             "ffmpeg": _jsonify(ffmpeg) if ffmpeg is not None else None,
             "libpng": _jsonify(libpng) if libpng is not None else None,

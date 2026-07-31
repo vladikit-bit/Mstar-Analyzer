@@ -11,6 +11,7 @@ import zlib
 
 from mstar_analyzer.detectors.objects import EmbeddedObject
 from mstar_analyzer.object_analyzer import (
+    analyze_dtb,
     analyze_elf,
     analyze_jpeg,
     analyze_lua,
@@ -494,6 +495,129 @@ class ElfTests(unittest.TestCase):
         analyze_elf(obj, data)
         self.assertTrue(obj.validated)
         self.assertEqual(obj.metadata["machine"], "MIPS")
+
+
+def _build_dtb(model="mstar,titania", compatible=("mstar,titania", "mstar,generic"), empty=False):
+    """Мінімальний, спец-коректний .dtb: лише model/compatible кореня (без дочірніх вузлів)."""
+
+    strings_block = b"model\x00compatible\x00"
+    model_nameoff = strings_block.index(b"model\x00")
+    compat_nameoff = strings_block.index(b"compatible\x00")
+
+    struct_block = bytearray()
+    struct_block += struct.pack(">I", 0x00000001)  # FDT_BEGIN_NODE
+    struct_block += b"\x00"                          # ім'я кореня = ""
+    while len(struct_block) % 4:
+        struct_block += b"\x00"
+
+    def add_prop(name_off, value):
+        struct_block.extend(struct.pack(">III", 0x00000003, len(value), name_off))
+        struct_block.extend(value)
+        while len(struct_block) % 4:
+            struct_block.extend(b"\x00")
+
+    if not empty:
+        add_prop(model_nameoff, model.encode() + b"\x00")
+        add_prop(compat_nameoff, b"\x00".join(c.encode() for c in compatible) + b"\x00")
+
+    struct_block += struct.pack(">I", 0x00000002)  # FDT_END_NODE
+    struct_block += struct.pack(">I", 0x00000009)  # FDT_END
+
+    off_mem_rsvmap = 40
+    mem_rsvmap = struct.pack(">QQ", 0, 0)
+    off_dt_struct = off_mem_rsvmap + len(mem_rsvmap)
+    off_dt_strings = off_dt_struct + len(struct_block)
+    used_strings = b"" if empty else strings_block
+    totalsize = off_dt_strings + len(used_strings)
+
+    header = struct.pack(
+        ">10I",
+        0xD00DFEED, totalsize, off_dt_struct, off_dt_strings, off_mem_rsvmap,
+        17, 16, 0, len(used_strings), len(struct_block),
+    )
+
+    return bytes(header) + mem_rsvmap + bytes(struct_block) + used_strings
+
+
+class DtbHeaderTests(unittest.TestCase):
+    """
+    Формат заголовка перевірений за офіційною Devicetree Specification
+    (devicetree-specification.readthedocs.io, §5.2) — 10 полів по
+    4 байти, big-endian.
+    """
+
+    def test_valid_dtb_extracts_model_and_compatible(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, _build_dtb())
+        self.assertTrue(obj.validated)
+        self.assertEqual(
+            obj.metadata["root_properties"],
+            {"model": "mstar,titania", "compatible": ["mstar,titania", "mstar,generic"]},
+        )
+
+    def test_single_compatible_string_not_wrapped_in_list(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, _build_dtb(compatible=("mstar,titania",)))
+        self.assertEqual(obj.metadata["root_properties"]["compatible"], "mstar,titania")
+
+    def test_unaligned_offset_still_parses_correctly(self):
+        # Регресія: вирівнювання рахувалось відносно абсолютного нуля
+        # буфера замість початку самого DTB-блоба — ламалось щоразу,
+        # коли DTB вбудований не з offset, кратного 4 (типовий випадок
+        # у реальній прошивці).
+        dtb = _build_dtb()
+        for offset in (1, 2, 3, 5, 77, 123):
+            data = b"\xAB" * offset + dtb
+            obj = EmbeddedObject(offset=offset, size=None, kind="DTB", description="Flattened Device Tree")
+            analyze_dtb(obj, data)
+            self.assertTrue(obj.validated, f"failed at offset={offset}")
+            self.assertEqual(
+                obj.metadata["root_properties"]["model"],
+                "mstar,titania",
+                f"wrong result at offset={offset}",
+            )
+
+    def test_empty_root_with_zero_length_strings_block_is_valid(self):
+        # Регресія: off_dt_strings, що вказує РІВНО на кінець totalsize
+        # з size_dt_strings=0 (дерево без властивостей), хибно
+        # відхилялось як "поза межами".
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, _build_dtb(empty=True))
+        self.assertTrue(obj.validated)
+        self.assertNotIn("root_properties", obj.metadata)
+
+    def test_truncated_header_rejected(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, b"\xd0\x0d\xfe\xed" + b"\x00" * 10)
+        self.assertFalse(obj.validated)
+        self.assertEqual(obj.metadata["reason"], "truncated_header")
+
+    def test_corrupted_magic_rejected(self):
+        dtb = bytearray(_build_dtb())
+        dtb[0] = 0x00
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, bytes(dtb))
+        self.assertFalse(obj.validated)
+        self.assertTrue(any("magic" in issue for issue in obj.metadata["header_issues"]))
+
+    def test_totalsize_beyond_available_data_rejected(self):
+        header = struct.pack(">10I", 0xD00DFEED, 99_999_999, 40, 9999, 40, 17, 16, 0, 10, 20)
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, header + b"\x00" * 100)
+        self.assertFalse(obj.validated)
+        self.assertTrue(any("totalsize" in issue for issue in obj.metadata["header_issues"]))
+
+    def test_all_zero_data_does_not_crash(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, b"\x00" * 60)  # не повинно кидати виняток
+        self.assertFalse(obj.validated)
+
+    def test_last_comp_version_greater_than_version_rejected(self):
+        header = struct.pack(">10I", 0xD00DFEED, 100, 40, 60, 40, 17, 18, 0, 10, 20)
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, header + b"\x00" * 60)
+        self.assertFalse(obj.validated)
+        self.assertTrue(any("last_comp_version" in issue for issue in obj.metadata["header_issues"]))
 
 
 if __name__ == "__main__":

@@ -169,5 +169,39 @@ class NetSrvSemanticSubsystemTests(unittest.TestCase):
         self.assertNotIn("NetSrv: Buffering", names)
 
 
+class OpenSSLConfigureFlagTests(unittest.TestCase):
+    """
+    Реальний рядок з прошивки — вбудований configure-рядок FFmpeg:
+    "...--disable-protocols --enable-openssl --enable-protocol=http...".
+    "openssl" там — прапорець збірки FFmpeg (TLS-бекенд), а не окремий
+    доказ бібліотеки OpenSSL, і вже точніше фіксується окремо як
+    FFmpegSummary.uses_openssl (reporting.py). Справжні шляхи пакета
+    openssl (".../packages/net/openssl/v_0_9_8o/...") мали б і далі
+    спрацьовувати як раніше.
+    """
+
+    def test_enable_openssl_configure_flag_does_not_trigger_feature(self):
+        text = "--disable-protocols --enable-openssl --enable-protocol=http --enable-protocol=https"
+        features = detect_features([_finding(text)])
+        names = {f.name for f in features}
+        self.assertNotIn("OpenSSL", names)
+
+    def test_disable_openssl_configure_flag_does_not_trigger_feature(self):
+        features = detect_features([_finding("--disable-gpl --disable-openssl --disable-doc")])
+        names = {f.name for f in features}
+        self.assertNotIn("OpenSSL", names)
+
+    def test_real_openssl_package_path_still_triggers_feature(self):
+        text = "/home/tao.yang/ecos_os/stb_ecospro/packages/net/openssl/v_0_9_8o/src/crypto/evp/evp_pbe.c"
+        features = detect_features([_finding(text)])
+        names = {f.name for f in features}
+        self.assertIn("OpenSSL", names)
+
+    def test_standalone_openssl_mention_still_triggers_feature(self):
+        features = detect_features([_finding("OpenSSL 0.9.8o initialized")])
+        names = {f.name for f in features}
+        self.assertIn("OpenSSL", names)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -134,6 +134,25 @@ class ObjectMetadataFormattingTests(unittest.TestCase):
         self.assertIn("lua_version: 5.0", output)
         self.assertIn("size_int: 0", output)   # falsy-але-значущий скаляр (0) не повинен зникати
 
+    def test_dict_metadata_renders_as_key_value_lines_not_repr(self):
+        # DTB root_properties — {'model': '...', 'compatible': [...]}
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        obj.metadata = {
+            "root_properties": {
+                "model": "mstar,titania",
+                "compatible": ["mstar,titania", "mstar,generic"],
+            },
+        }
+        output = self._render_objects([obj])
+        self.assertIn("model: mstar,titania", output)
+        self.assertNotIn("{'model'", output)
+
+    def test_empty_dict_metadata_prints_nothing_for_that_key(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        obj.metadata = {"root_properties": {}}
+        output = self._render_objects([obj])
+        self.assertNotIn("root_properties", output)
+
 
 if __name__ == "__main__":
     unittest.main()

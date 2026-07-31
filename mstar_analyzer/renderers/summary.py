@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from ..reporting import (
+    CapabilitySummary,
     FFmpegSummary,
     LibpngSummary,
     OpenSSLSummary,
     RuntimeSummary,
+    collect_capabilities,
     collect_ffmpeg,
     collect_libpng,
     collect_openssl,
     collect_runtime,
 )
 from ..firmware_tree import FirmwareNode
+from ..detectors.features import FEATURE_CATEGORY_ORDER, FEATURE_CONFIDENCE_MARKER
 from .runtime import render_ecos_packages
 
 
@@ -23,16 +26,26 @@ def render_cross_tree_summary(root: FirmwareNode) -> None:
     йшлося в обговоренні архітектури проєкту.
 
     Runtime іде першим — це найбільш "фундаментальний" факт про
-    прошивку (яка ОС/архітектура/toolchain), решта — конкретні
-    бібліотеки й версії поверх нього.
+    прошивку (яка ОС/архітектура/toolchain), Capabilities — одразу за
+    ним як функціональний огляд ("що вміє"), а решта — конкретні
+    бібліотеки й версії поверх нього (доповнюють, а не дублюють
+    Capabilities: там є номери версій, яких немає в самому переліку
+    можливостей).
     """
 
     runtime = collect_runtime(root)
+    capabilities = collect_capabilities(root)
     openssl = collect_openssl(root)
     ffmpeg = collect_ffmpeg(root)
     libpng = collect_libpng(root)
 
-    if runtime is None and openssl is None and ffmpeg is None and libpng is None:
+    if (
+        runtime is None
+        and capabilities is None
+        and openssl is None
+        and ffmpeg is None
+        and libpng is None
+    ):
         return
 
     print()
@@ -41,6 +54,9 @@ def render_cross_tree_summary(root: FirmwareNode) -> None:
 
     if runtime is not None:
         _render_runtime(runtime)
+
+    if capabilities is not None:
+        _render_capabilities(capabilities)
 
     if openssl is not None:
         _render_openssl(openssl)
@@ -74,6 +90,25 @@ def _render_runtime(summary: RuntimeSummary) -> None:
 
     for path in summary.nodes:
         print(f"    {path}")
+
+
+def _render_capabilities(summary: CapabilitySummary) -> None:
+
+    print()
+    print("Capabilities")
+
+    for category in FEATURE_CATEGORY_ORDER:
+
+        entries = summary.by_category.get(category)
+
+        if not entries:
+            continue
+
+        print(f"    {category}:")
+
+        for entry in entries:
+            marker = FEATURE_CONFIDENCE_MARKER.get(entry.confidence, "?")
+            print(f"        {marker} {entry.name}")
 
 
 def _render_openssl(summary: OpenSSLSummary) -> None:

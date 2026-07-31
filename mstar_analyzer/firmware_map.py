@@ -13,10 +13,10 @@ LZMA-заголовок" .
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .entropy import EntropyPoint, classify_region, high_entropy_regions, scan_entropy, sparkline
-from .signatures import AsciiMarkerScanner, Finding, LzmaHeuristicScanner, MagicScanner
+from .signatures import AsciiMarkerScanner, LzmaHeuristicScanner, MagicScanner
 
 
 @dataclass

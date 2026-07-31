@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .detectors.features import FEATURE_CATEGORIES
 from .firmware_tree import FirmwareNode
 
 @dataclass(slots=True)
@@ -210,5 +211,74 @@ def collect_libpng(root: FirmwareNode) -> LibpngSummary | None:
 
     if not summary.nodes:
         return None
+
+    return summary
+
+
+@dataclass(slots=True)
+class CapabilityEntry:
+
+    name: str
+    confidence: str    # найкраща (найвища) confidence, що зустрілась деінде в дереві
+    score: int         # відповідний їй score
+    nodes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class CapabilitySummary:
+
+    # категорія -> список фіч у ній (уже відсортований за спаданням score)
+    by_category: dict[str, list[CapabilityEntry]] = field(default_factory=dict)
+
+
+def collect_capabilities(root: FirmwareNode) -> CapabilitySummary | None:
+    """
+    Наскрізне зведення ВСІХ Feature, знайдених по дереву (node.features —
+    те, що вже показує render_node_features на кожному вузлі окремо),
+    згруповане за категорією (FEATURE_CATEGORIES у detectors/features.py)
+    замість розкиданого по вузлах списку. Те саме, про що просили в
+    кількох рев'ю: "Networking / Streaming / 3D / Dolby одним блоком".
+
+    Одна й та сама feature може зустрітись у кількох вузлах (напр.
+    "FFmpeg" і в MBoot, і в Network/streaming module) з РІЗНИМ score —
+    зведення бере найсильніший (найвищий score) прояв і перелічує УСІ
+    вузли, де вона зустрічалась.
+    """
+
+    entries: dict[str, CapabilityEntry] = {}
+
+    for node in root.walk():
+
+        for feature in node.features:
+
+            existing = entries.get(feature.name)
+
+            if existing is None:
+                entries[feature.name] = CapabilityEntry(
+                    name=feature.name,
+                    confidence=feature.confidence,
+                    score=feature.score,
+                    nodes=[node.display_path],
+                )
+                continue
+
+            if node.display_path not in existing.nodes:
+                existing.nodes.append(node.display_path)
+
+            if feature.score > existing.score:
+                existing.score = feature.score
+                existing.confidence = feature.confidence
+
+    if not entries:
+        return None
+
+    summary = CapabilitySummary()
+
+    for entry in entries.values():
+        category = FEATURE_CATEGORIES.get(entry.name, "Other")
+        summary.by_category.setdefault(category, []).append(entry)
+
+    for category_entries in summary.by_category.values():
+        category_entries.sort(key=lambda e: -e.score)
 
     return summary

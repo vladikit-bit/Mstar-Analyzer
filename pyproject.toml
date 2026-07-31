@@ -8,7 +8,11 @@ version = "0.1.0"
 description = "Modular firmware analysis framework for MStar/embedded Set-Top-Box and OTT device firmware."
 readme = "Readme.md"
 requires-python = ">=3.10"
-license = { text = "License information will be added in a future release." }
+# license: навмисно не вказано. Проєкт приватний, і в репозиторії
+# немає жодного файлу LICENSE чи заяви про ліцензування — вигадувати
+# конкретну ліцензію тут означало б приймати юридичне рішення за
+# автора проєкту. Додайте `license = "..."` (SPDX-ідентифікатор) або
+# `license = {file = "LICENSE"}`, коли рішення буде прийнято.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

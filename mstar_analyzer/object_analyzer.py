@@ -35,6 +35,9 @@ def analyze_objects(
         elif obj.kind == "ELF":
             analyze_elf(obj, data)
 
+        elif obj.kind == "DTB":
+            analyze_dtb(obj, data)
+
         elif obj.kind == "MBootEnvBlock":
             analyze_mboot_env_block(obj, data)
 
@@ -1134,6 +1137,222 @@ def _parse_section_headers(
     return sections, notes
 
 
+# ============================================================================
+# Flattened Device Tree (DTB)
+# ============================================================================
+#
+# Заголовок (Devicetree Specification §5.2, перевірено за офіційним
+# джерелом devicetree-specification.readthedocs.io) — 10 полів по
+# 4 байти, ВСІ big-endian, незалежно від архітектури/ендіанності самого
+# CPU прошивки (це фіксована властивість формату .dtb, а не щось, що
+# треба визначати як для ELF):
+#
+#   magic, totalsize, off_dt_struct, off_dt_strings, off_mem_rsvmap,
+#   version, last_comp_version, boot_cpuid_phys, size_dt_strings,
+#   size_dt_struct
+#
+# Повний рекурсивний обхід дерева (усі вузли/властивості) свідомо НЕ
+# реалізований — це окремий, значно більший модуль. Тут — структурна
+# валідація заголовка (той самий issues-список патерн, що для Lua/ELF
+# вище) плюс легкий, нерекурсивний прохід ЛИШЕ по властивостях
+# кореневого вузла (до першого дочірнього FDT_BEGIN_NODE): за
+# специфікацією властивості вузла завжди йдуть ПЕРЕД його дочірніми
+# вузлами, тож "model"/"compatible" кореня — а це майже завжди
+# найточніший підпис апаратної платформи — гарантовано трапляються
+# раніше першого дочірнього вузла.
+
+DTB_HEADER_SIZE = 40  # 10 x uint32 big-endian
+
+DTB_MAGIC = 0xD00DFEED
+
+DTB_TOKEN_BEGIN_NODE = 0x00000001
+DTB_TOKEN_END_NODE = 0x00000002
+DTB_TOKEN_PROP = 0x00000003
+DTB_TOKEN_NOP = 0x00000004
+DTB_TOKEN_END = 0x00000009
+
+# Найінформативніші властивості кореневого вузла для ідентифікації
+# платформи — розширювати обережно: кожна додана сюди властивість не
+# впливає на розбір самого дерева, лише на те, що потрапляє в metadata.
+DTB_INTERESTING_ROOT_PROPS = {"model", "compatible"}
+
+
+def _read_dtb_root_properties(
+    data: bytes,
+    struct_start: int,
+    struct_end: int,
+    strings_start: int,
+    strings_end: int,
+) -> dict[str, object]:
+
+    props: dict[str, object] = {}
+
+    pos = struct_start
+
+    if pos + 4 > struct_end:
+        return props
+
+    (token,) = struct.unpack_from(">I", data, pos)
+
+    if token != DTB_TOKEN_BEGIN_NODE:
+        return props
+
+    pos += 4
+
+    # Ім'я кореневого вузла — null-terminated рядок (для root це
+    # типово порожній рядок, тобто рівно один нульовий байт).
+    name_end = data.find(b"\x00", pos, struct_end)
+
+    if name_end == -1:
+        return props
+
+    pos = name_end + 1
+
+    # ВАЖЛИВО: вирівнювання — відносно ПОЧАТКУ структурного блоку
+    # (struct_start), а НЕ відносно абсолютного нуля буфера `data`.
+    # Специфікація гарантує 4-байтне вирівнювання offset'ів усередині
+    # самого .dtb; коли DTB вбудований у прошивку не з нульового
+    # зсуву (obj.offset не кратний 4 — типовий випадок), вирівнювання
+    # за абсолютною адресою в `data` дає ЗСУНУТИЙ результат.
+    pos = struct_start + (((pos - struct_start) + 3) & ~3)
+
+    while pos + 4 <= struct_end:
+
+        (token,) = struct.unpack_from(">I", data, pos)
+        pos += 4
+
+        if token == DTB_TOKEN_NOP:
+            continue
+
+        if token != DTB_TOKEN_PROP:
+            # FDT_BEGIN_NODE (перший дочірній вузол), FDT_END_NODE,
+            # FDT_END, або щось нерозпізнане — властивості кореня
+            # закінчились (за специфікацією вони йдуть СТРОГО перед
+            # дочірніми вузлами).
+            break
+
+        if pos + 8 > struct_end:
+            break
+
+        length, nameoff = struct.unpack_from(">II", data, pos)
+        pos += 8
+
+        if length < 0 or pos + length > struct_end:
+            break
+
+        value = data[pos:pos + length]
+        pos += length
+        pos = struct_start + (((pos - struct_start) + 3) & ~3)
+
+        name_start = strings_start + nameoff
+        name_stop = data.find(b"\x00", name_start, strings_end)
+        prop_name = (
+            data[name_start:name_stop].decode("ascii", "replace")
+            if 0 <= nameoff and name_stop != -1
+            else None
+        )
+
+        if prop_name not in DTB_INTERESTING_ROOT_PROPS:
+            continue
+
+        # "compatible" традиційно зберігається як кілька
+        # null-terminated рядків підряд ("vendor,soc\0vendor,generic\0")
+        # — розбиваємо на список, якщо їх більше одного.
+        parts = [p for p in value.split(b"\x00") if p]
+        decoded = [p.decode("utf-8", "replace") for p in parts]
+
+        if not decoded:
+            continue
+
+        props[prop_name] = decoded[0] if len(decoded) == 1 else decoded
+
+    return props
+
+
+def analyze_dtb(obj: EmbeddedObject, data: bytes) -> None:
+
+    pos = obj.offset
+
+    header = data[pos:pos + DTB_HEADER_SIZE]
+
+    if len(header) < DTB_HEADER_SIZE:
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "truncated_header"
+        return
+
+    (
+        magic,
+        totalsize,
+        off_dt_struct,
+        off_dt_strings,
+        off_mem_rsvmap,
+        version,
+        last_comp_version,
+        boot_cpuid_phys,
+        size_dt_strings,
+        size_dt_struct,
+    ) = struct.unpack(">10I", header)
+
+    available = len(data) - pos
+
+    obj.metadata.update(
+        {
+            "version": version,
+            "last_comp_version": last_comp_version,
+            "boot_cpuid_phys": boot_cpuid_phys,
+            "totalsize": totalsize,
+        }
+    )
+
+    issues: list[str] = []
+
+    if magic != DTB_MAGIC:
+        issues.append(f"magic=0x{magic:08X} (очікується 0x{DTB_MAGIC:08X})")
+
+    # DTSpec: "DTSpec compliant client programs shall accept devicetrees
+    # of any version backwards compatible with version 17" — 16 це
+    # мінімальна документована версія (§5.1), тож усе нижче або
+    # аномально високе вважаємо неправдоподібним.
+    if not (16 <= version <= 100):
+        issues.append(f"version={version} (неправдоподібне значення)")
+
+    if last_comp_version > version:
+        issues.append(f"last_comp_version={last_comp_version} > version={version}")
+
+    if totalsize < DTB_HEADER_SIZE or totalsize > available:
+        issues.append(f"totalsize={totalsize} виходить за межі доступних даних ({available})")
+
+    elif off_dt_struct < DTB_HEADER_SIZE or off_dt_struct >= totalsize:
+        issues.append(f"off_dt_struct={off_dt_struct} поза межами totalsize={totalsize}")
+
+    elif size_dt_struct == 0 or off_dt_struct + size_dt_struct > totalsize:
+        issues.append(f"size_dt_struct={size_dt_struct} виходить за межі totalsize={totalsize}")
+
+    elif off_dt_strings < DTB_HEADER_SIZE or off_dt_strings + size_dt_strings > totalsize:
+        issues.append(f"off_dt_strings/size_dt_strings виходять за межі totalsize={totalsize}")
+
+    if issues:
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "implausible_header_fields"
+        obj.metadata["header_issues"] = issues
+        return
+
+    obj.size = totalsize
+
+    root_properties = _read_dtb_root_properties(
+        data,
+        struct_start=pos + off_dt_struct,
+        struct_end=pos + off_dt_struct + size_dt_struct,
+        strings_start=pos + off_dt_strings,
+        strings_end=pos + off_dt_strings + size_dt_strings,
+    )
+
+    if root_properties:
+        obj.metadata["root_properties"] = root_properties
+
+
 def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
     """
     Глибока структурна валідація ELF-об'єкта.
@@ -1229,7 +1448,8 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
         )
 
     # phoff/shoff: або 0 (відсутні), або мають вказувати за межі header.
-    header_end = pos + expected_ehsize
+    # (обидва — offset відносно початку самого ELF, тобто відносно pos,
+    # тому звіряємо з expected_ehsize напряму, а не з абсолютною позицією)
     for name in ("phoff", "shoff"):
         val = hdr[name]
         if val != 0 and val < expected_ehsize:

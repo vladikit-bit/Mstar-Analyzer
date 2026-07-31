@@ -4,6 +4,7 @@ from .firmware_tree import FirmwareNode
 from .string_filter import filter_strings
 from .renderers import RENDERERS
 from .renderers.summary import render_cross_tree_summary
+from .detectors.features import FEATURE_CONFIDENCE_MARKER
 
 
 def render_tree(root: FirmwareNode) -> None:
@@ -215,18 +216,6 @@ def render_node_code_caves(node: FirmwareNode) -> None:
 
 # Феча — це сукупний score з УСІХ сигнатур, що збіглися під цим іменем
 # (детально: detectors/features.py Feature.score / score_to_confidence),
-# тож "✓" однаковий і для 5-очкового поодинокого слабкого патерна
-# ("eygp3-ge" -> Graphics Engine WEAK), і для 100+-очкового підтвердженого
-# (MDrv_GE_*) виглядало як однаково надійний доказ. Три різні маркери
-# замість одного "✓" — щоб різницю між "вартий довіри" і "варто
-# перевірити вручну" було видно з першого погляду, без походу у JSON.
-_FEATURE_CONFIDENCE_MARKER = {
-    "HIGH": "✓",
-    "MEDIUM": "~",
-    "LOW": "?",
-}
-
-
 def render_node_features(node: FirmwareNode) -> None:
 
     if not node.features:
@@ -238,7 +227,7 @@ def render_node_features(node: FirmwareNode) -> None:
 
     for feature in node.features:
 
-        marker = _FEATURE_CONFIDENCE_MARKER.get(feature.confidence, "?")
+        marker = FEATURE_CONFIDENCE_MARKER.get(feature.confidence, "?")
 
         print(f"{marker} {feature.name}  [{feature.confidence}, score={feature.score}]")
         print(f"    evidence: {feature.evidence}")
@@ -283,17 +272,31 @@ _METADATA_LIST_PREVIEW = 8
 
 def _render_metadata_value(key: str, value: object, indent: str) -> None:
     """
-    obj.metadata значення — довільні (str/int/bool/список/None), бо різні
-    аналізатори (MBoot env block, Lua header) кладуть туди що їм потрібно.
-    Раніше все йшло через один generic f"{key}: {value}" — для скалярів
-    це нормально, але для list[dict] (mboot_variables) чи list[str]
-    (Lua header_issues) виходив сирий Python repr
-    ("[{'name': 'Board', 'value': ...}]"), який важко читати. Тут —
-    та сама генерична обробка, лише з двома додатковими формами для
-    списків, а не спеціальний код під кожен ключ/obj.kind окремо.
+    obj.metadata значення — довільні (str/int/bool/список/словник/None),
+    бо різні аналізатори (MBoot env block, Lua header, DTB root
+    properties) кладуть туди що їм потрібно. Раніше все йшло через один
+    generic f"{key}: {value}" — для скалярів це нормально, але для
+    list[dict] (mboot_variables), list[str] (Lua header_issues) чи
+    просто dict (DTB root_properties) виходив сирий Python repr
+    ("[{'name': 'Board', 'value': ...}]" / "{'model': '...', ...}"),
+    який важко читати. Тут — та сама генерична обробка, лише з трьома
+    додатковими формами (list[dict] / list[скаляр] / dict), а не
+    спеціальний код під кожен ключ/obj.kind окремо.
     """
 
-    if isinstance(value, list) and not value:
+    if isinstance(value, (list, dict)) and not value:
+        return
+
+    if isinstance(value, dict):
+
+        # Плаский словник (напр. DTB root_properties: model/compatible)
+        # — "ключ: значення" по одному на рядок, без Python repr фігурних
+        # дужок і лапок навколо всього.
+        print(f"{indent}{key}:")
+
+        for sub_key, sub_value in value.items():
+            print(f"{indent}    {sub_key}: {sub_value}")
+
         return
 
     if isinstance(value, list) and all(isinstance(item, dict) for item in value):
