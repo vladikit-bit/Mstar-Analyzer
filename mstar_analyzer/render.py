@@ -271,4 +271,70 @@ def render_node_objects(node: FirmwareNode) -> None:
                 if value is None:
                     continue
 
-                print(f"               {key}: {value}")
+                _render_metadata_value(key, value, indent="               ")
+
+
+# Скільки елементів списку показувати перед "... (+N more)" — той самий
+# компроміс, що вже застосований у SDK symbol profile (renderers/sdk_symbols.py
+# MAX_EXAMPLES): досить, щоб дати уявлення про вміст, замало, щоб один
+# об'єкт з довгим списком (напр. MBoot з 40+ змінними) не забив увесь звіт.
+_METADATA_LIST_PREVIEW = 8
+
+
+def _render_metadata_value(key: str, value: object, indent: str) -> None:
+    """
+    obj.metadata значення — довільні (str/int/bool/список/None), бо різні
+    аналізатори (MBoot env block, Lua header) кладуть туди що їм потрібно.
+    Раніше все йшло через один generic f"{key}: {value}" — для скалярів
+    це нормально, але для list[dict] (mboot_variables) чи list[str]
+    (Lua header_issues) виходив сирий Python repr
+    ("[{'name': 'Board', 'value': ...}]"), який важко читати. Тут —
+    та сама генерична обробка, лише з двома додатковими формами для
+    списків, а не спеціальний код під кожен ключ/obj.kind окремо.
+    """
+
+    if isinstance(value, list) and not value:
+        return
+
+    if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+
+        # Список "записів" (mboot_variables і будь-що подібне в
+        # майбутньому) — окремих аналізаторів під кожен формат не
+        # заводимо, натомість: якщо є пара name/value — показуємо як
+        # "name = value" (найчастіший випадок), інакше — компактний
+        # key=val перелік по всіх полях запису.
+        print(f"{indent}{key} ({len(value)}):")
+
+        for item in value[:_METADATA_LIST_PREVIEW]:
+
+            if "name" in item and "value" in item:
+                extra = {k: v for k, v in item.items() if k not in ("name", "value")}
+                line = f"{indent}    {item['name']} = {item['value']}"
+                if extra:
+                    line += "  (" + ", ".join(f"{k}={v}" for k, v in extra.items()) + ")"
+                print(line)
+            else:
+                print(f"{indent}    " + ", ".join(f"{k}={v}" for k, v in item.items()))
+
+        remaining = len(value) - _METADATA_LIST_PREVIEW
+        if remaining > 0:
+            print(f"{indent}    ... (+{remaining} more)")
+
+        return
+
+    if isinstance(value, list):
+
+        # Список скалярів (Lua header_issues тощо) — маркований список
+        # замість одного рядка з квадратними дужками та лапками.
+        print(f"{indent}{key} ({len(value)}):")
+
+        for item in value[:_METADATA_LIST_PREVIEW]:
+            print(f"{indent}    - {item}")
+
+        remaining = len(value) - _METADATA_LIST_PREVIEW
+        if remaining > 0:
+            print(f"{indent}    ... (+{remaining} more)")
+
+        return
+
+    print(f"{indent}{key}: {value}")

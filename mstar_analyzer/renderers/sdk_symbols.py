@@ -20,20 +20,42 @@ def render(summary: SdkSymbolProfile) -> None:
 
         subsystems = summary.subsystems.get(category)
 
-        if not subsystems:
+        if subsystems:
+
+            for subsystem, names in sorted(subsystems.items(), key=lambda kv: -len(kv[1])):
+
+                examples = sorted(names)[:MAX_EXAMPLES]
+                more = len(names) - len(examples)
+
+                line = f"    {subsystem} ({len(names)}): " + ", ".join(examples)
+
+                if more > 0:
+                    line += f", ... (+{more} more)"
+
+                print(line)
+
             continue
 
-        for subsystem, names in sorted(subsystems.items(), key=lambda kv: -len(kv[1])):
+        # Категорії без розбивки на підсистеми (lua_/MsOS_/luaL_ — див.
+        # коментар над PATTERNS у analyzers/sdk_symbols.py: у їхній
+        # конвенції немає окремого "підсистемного" сегмента імені).
+        # Раніше тут не друкувалось НІЧОГО, крім самого count вище —
+        # хоча плаский список символів (summary.symbols[category]) уже
+        # існував і просто ніколи не показувався.
+        names = summary.symbols.get(category)
 
-            examples = sorted(names)[:MAX_EXAMPLES]
-            more = len(names) - len(examples)
+        if not names:
+            continue
 
-            line = f"    {subsystem} ({len(names)}): " + ", ".join(examples)
+        examples = sorted(names)[:MAX_EXAMPLES]
+        more = len(names) - len(examples)
 
-            if more > 0:
-                line += f", ... (+{more} more)"
+        line = "    " + ", ".join(examples)
 
-            print(line)
+        if more > 0:
+            line += f", ... (+{more} more)"
+
+        print(line)
 
     print()
     print(f"Total distinct symbols : {summary.total}")

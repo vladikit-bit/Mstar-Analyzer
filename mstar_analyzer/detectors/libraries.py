@@ -1,5 +1,6 @@
 from ..analyzers import (
     analyze_busybox,
+    analyze_codec_table,
     analyze_ffmpeg,
     analyze_openssl,
     analyze_runtime,
@@ -8,6 +9,7 @@ from ..analyzers import (
 
 ANALYZERS = {
     "busybox": analyze_busybox,
+    "codec_table": analyze_codec_table,
     "ffmpeg": analyze_ffmpeg,
     "openssl": analyze_openssl,
     "runtime": analyze_runtime,

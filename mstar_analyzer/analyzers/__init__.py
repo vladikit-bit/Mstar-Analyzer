@@ -3,6 +3,7 @@ from .openssl import OpenSSLInfo, analyze_openssl
 from .busybox import BusyBoxInfo, analyze_busybox
 from .runtime import RuntimeInfo, analyze_runtime
 from .sdk_symbols import SdkSymbolProfile, analyze_sdk_symbols
+from .codec_table import CodecTable, CodecTableProfile, analyze_codec_table
 from .mboot_env import MBootVariable, MBootEnvBlockInfo, parse_mboot_env_block, compute_confidence
 
 __all__ = [
@@ -16,6 +17,9 @@ __all__ = [
     "analyze_runtime",
     "SdkSymbolProfile",
     "analyze_sdk_symbols",
+    "CodecTable",
+    "CodecTableProfile",
+    "analyze_codec_table",
     "MBootVariable",
     "MBootEnvBlockInfo",
     "parse_mboot_env_block",

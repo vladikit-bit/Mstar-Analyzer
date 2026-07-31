@@ -75,6 +75,40 @@ SIGNATURES: list[Signature] = [
         weight=50,
     ),
 
+    # Семантичний розподіл NetSrv за підобластями. NetSrv-рядки — це
+    # debug-логи ("[NetSrv][%s][line:%d][ERROR][Download Module], ..."),
+    # а не C-символи з фіксованою конвенцією іменування (як MDrv_/MApi_),
+    # тому "підсистему" тут неможливо витягти самим regex-парсингом
+    # префікса — натомість кожен підпункт вимагає одночасно і тег
+    # "[NetSrv]", і конкретне, підтверджене реальними рядками з прошивки
+    # ключове слово в тому самому рядку. Це навмисно ті самі
+    # Signature/Feature класи, що й для решти фіч вище — не окремий
+    # аналізатор чи механізм.
+    Signature(
+        feature="NetSrv: Download Module",
+        pattern=re.compile(r"\[NetSrv\].*\[Download Module\]", re.I),
+        weight=60,
+        confidence="STRONG",
+    ),
+
+    Signature(
+        feature="NetSrv: Buffering",
+        pattern=re.compile(r"\[NetSrv\].*\bBuffering\b", re.I),
+        weight=60,
+        confidence="STRONG",
+    ),
+
+    Signature(
+        # weight=50, дефолтна confidence (не STRONG, на відміну від двох
+        # вище): патерн об'єднує три РІЗНІ, менш специфічні ключові
+        # слова через (?:...|...|...) — це надійний сигнал наявності
+        # клієнт/сесійної логіки, але не такий однозначний "бірка", як
+        # буквальний "[Download Module]" чи окреме слово "Buffering".
+        feature="NetSrv: Client session",
+        pattern=re.compile(r"\[NetSrv\].*(?:Client_Close|ClientList|session count)", re.I),
+        weight=50,
+    ),
+
     Signature(
         feature="HLS Streaming",
         pattern=re.compile(r"application/x-mpegURL", re.I),
@@ -91,6 +125,18 @@ SIGNATURES: list[Signature] = [
         feature="FFmpeg",
         pattern=re.compile(r"\bffmpeg\b", re.I),
         weight=50,
+    ),
+
+    Signature(
+        # Літеральний банер версії ("FFMPEG VERSION : 2.5.4") — набагато
+        # специфічніший за голе слово "ffmpeg" вище (те може з'явитись
+        # де завгодно, напр. усередині чужого --extra-cflags рядка збірки
+        # OpenSSL, зібраної в тому самому SDK). weight=100 — та сама
+        # логіка "STRONG сам по собі дає MEDIUM", що й для MIU/GE вище.
+        feature="FFmpeg",
+        pattern=re.compile(r"FFMPEG\s+VERSION\s*:", re.I),
+        weight=100,
+        confidence="STRONG",
     ),
 
     Signature(
@@ -148,9 +194,15 @@ SIGNATURES: list[Signature] = [
         # Реальні рядки з прошивки завжди мають номер контролера
         # ("MIU0 Init Done", "Wait MIU0..."), причому номер може бути
         # багатозначним (MIU10, MIU32) — \d+, а не одна цифра.
+        #
+        # weight=100 (не 60): це вже STRONG-сигнатура — один-єдиний
+        # реальний збіг типу "Disable MIU1" сам по собі мав би одразу
+        # дати щонайменше MEDIUM (>=100 з score_to_confidence), а не
+        # лишатись у LOW разом зі слабкими WEAK-збігами вище. 100 — той
+        # самий рівень, що вже усталений для MDrv_GE (теж STRONG) нижче.
         feature="Memory controller",
         pattern=re.compile(r"\bMIU\d+\b", re.I),
-        weight=60,
+        weight=100,
         confidence="STRONG",
     ),
 
@@ -214,7 +266,7 @@ SIGNATURES: list[Signature] = [
     Signature(
         feature="Graphics Engine",
         pattern=re.compile(r"driver\s+GE", re.I),
-        weight=80,
+        weight=100,
         confidence="STRONG",
     ),
 
@@ -247,6 +299,17 @@ SIGNATURES: list[Signature] = [
         feature="H.264 decoder",
         pattern=re.compile(r"\bh264\b", re.I),
         weight=50,
+    ),
+
+    Signature(
+        # "Vdec:H264" — MStar-стилю runtime тег вибору відео-декодера
+        # (те саме сімейство, що "Adec:MPEG" для аудіо нижче), значно
+        # специфічніший за голе "h264", яке може збігтись і в шумі
+        # непроявлених рядків.
+        feature="H.264 decoder",
+        pattern=re.compile(r"Vdec:\s*H\.?264\b", re.I),
+        weight=100,
+        confidence="STRONG",
     ),
 
     Signature(
@@ -308,6 +371,16 @@ def detect_features(strings: Iterable[StringFinding]) -> list[Feature]:
 
     found: dict[str, Feature] = {}
 
+    # feature -> {текст рядка -> найбільша вага, вже зарахована за цей
+    # рядок}. Один рядок може збігтись одразу з кількома сигнатурами
+    # однієї фічі різної "сили" (напр. "driver GE init ok" відповідає
+    # і слабкому \bGE\b, і сильному "driver GE") — це одна й та сама
+    # доказова строка, тож зараховуємо її внесок у score РІВНО ОДИН
+    # РАЗ, і саме за НАЙСИЛЬНІШОЮ сигнатурою, що збіглась, а не за
+    # першою в списку SIGNATURES (без цього порядок оголошення сигнатур
+    # у списку випадково впливав би на підсумковий score).
+    credited: dict[str, dict[str, int]] = {}
+
     for s in strings:
 
         if not is_signal_length(s.text):
@@ -328,9 +401,14 @@ def detect_features(strings: Iterable[StringFinding]) -> list[Feature]:
                     ),
                 )
 
-                if s.text not in feature.evidences:
-                    feature.evidences.add(s.text)
-                    feature.score += sig.weight
+                feature.evidences.add(s.text)
+
+                already_credited = credited.setdefault(sig.feature, {})
+                prior_weight = already_credited.get(s.text, 0)
+
+                if sig.weight > prior_weight:
+                    feature.score += sig.weight - prior_weight
+                    already_credited[s.text] = sig.weight
 
                 if sig not in feature.matched_signatures:
                     feature.matched_signatures.append(sig)

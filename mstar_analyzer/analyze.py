@@ -181,6 +181,11 @@ def main():
     if args.output:
 
         output_path = Path(args.output)
+        # --output/--json приймають шлях, а не лише ім'я файлу (напр.
+        # "reports/flash.txt") — без цього відкриття файлу в
+        # неіснуючій директорії падає FileNotFoundError ще до першого
+        # print() звіту.
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with output_path.open("w", encoding="utf-8") as f:
             with contextlib.redirect_stdout(f):
@@ -235,7 +240,9 @@ def _run(firmware: Path, json_path: str | None = None) -> None:
 
     if json_path:
         report = build_json_report(root)
-        Path(json_path).write_text(
+        json_out = Path(json_path)
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(
             json.dumps(report, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
