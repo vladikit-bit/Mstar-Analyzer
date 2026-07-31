@@ -15,6 +15,16 @@ COMPRESSION_BY_NAME: dict[str, tuple[str, str]] = {
 }
 
 
+# Maps Extractor.method -> (format, node_type, label)
+# For filesystem containers. Single-stream compressors use
+# COMPRESSION_BY_NAME instead.
+FILESYSTEM_BY_NAME: dict[str, tuple[str, str, str]] = {
+    "squashfs": ("squashfs", "filesystem", "SquashFS filesystem"),
+    # Future: "ubifs": ("ubifs", "filesystem", "UBI filesystem"),
+    # Future: "cramfs": ("cramfs", "filesystem", "CramFS filesystem"),
+}
+
+
 def _has_feature(name: str) -> Callable[[set[str], dict], bool]:
     return lambda features, analysis: name in features
 
@@ -73,6 +83,16 @@ def classify_node(node: FirmwareNode) -> None:
     This module is responsible only for semantic classification.
     It never parses firmware by itself.
     """
+
+    # -------------------------------------------------
+    # Filesystem containers
+    # -------------------------------------------------
+
+    fs_info = FILESYSTEM_BY_NAME.get(node.name)
+
+    if fs_info is not None:
+        node.format, node.node_type, node.label = fs_info
+        return  # Skip compression and semantic classification for containers
 
     # -------------------------------------------------
     # Compression

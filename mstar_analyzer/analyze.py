@@ -61,6 +61,8 @@ def collect_extract_candidates(fw_map):
             "gzip",
             "xz",
             "bzip2",
+            "SquashFS (LE)",
+            "SquashFS (BE)",
         ):
             findings.append(
                 Finding(
@@ -115,27 +117,71 @@ def analyze_node(node: FirmwareNode, depth: int = 0) -> None:
         if not result.success:
             continue
 
-        if result.data is None:
-            continue
+        if result.entries:
+            # --- Filesystem extraction (SquashFS, UBIFS, CRAMFS, ...) ---
+            # Create a container node for the filesystem image itself.
+            container = None
 
-        digest = hashlib.sha256(result.data).digest()
+            if result.data is not None:
+                digest = hashlib.sha256(result.data).digest()
+                if digest not in seen:
+                    seen.add(digest)
+                    container = FirmwareNode(
+                        name=result.method,
+                        offset=result.offset,
+                        data=result.data,
+                    )
+                    # Pass filesystem metadata to the container node before
+                    # classification, so classifiers can use it in the future.
+                    if result.metadata:
+                        container.analysis = dict(result.metadata)
+                    classify_node(container)
+                    node.add_child(container)
+                    # Container is NOT recursively analyzed — its children
+                    # (the extracted files) are already parsed and will be
+                    # analyzed individually below.
 
-        if digest in seen:
-            continue
+            # Create a child node for each extracted file.
+            for entry in result.entries:
+                entry_digest = hashlib.sha256(entry.data).digest()
+                if entry_digest in seen:
+                    continue
+                seen.add(entry_digest)
 
-        seen.add(digest)
+                child = FirmwareNode(
+                    name=entry.name,
+                    offset=entry.offset,
+                    data=entry.data,
+                )
+                classify_node(child)
 
-        child = FirmwareNode(
-            name=result.method,
-            offset=result.offset,
-            data=result.data,
-        )
+                # Attach to container if one was created, else to parent.
+                target = container if container is not None else node
+                target.add_child(child)
 
-        classify_node(child)
+                analyze_node(child, depth + 1)
 
-        node.add_child(child)
+        elif result.data is not None:
+            # --- Single-stream extraction (gzip, xz, lzma, bzip2) ---
+            # (existing code, unchanged)
+            digest = hashlib.sha256(result.data).digest()
 
-        analyze_node(child, depth + 1)
+            if digest in seen:
+                continue
+
+            seen.add(digest)
+
+            child = FirmwareNode(
+                name=result.method,
+                offset=result.offset,
+                data=result.data,
+            )
+
+            classify_node(child)
+
+            node.add_child(child)
+
+            analyze_node(child, depth + 1)
 
 
 def main():

@@ -5,6 +5,7 @@ from .lzma import LZMAExtractor
 from .gzip import GZipExtractor
 from .xz import XZExtractor
 from .bzip2 import BZip2Extractor
+from .squashfs import SquashFsExtractor
 from ..signatures import Finding
 
 
@@ -19,6 +20,8 @@ _EXTRACTOR_BY_NAME: dict[str, type[Extractor]] = {
     "gzip": GZipExtractor,
     "xz": XZExtractor,
     "bzip2": BZip2Extractor,
+    "SquashFS (LE)": SquashFsExtractor,
+    "SquashFS (BE)": SquashFsExtractor,
 }
 
 # НЕ додавайте сюди generic "raw"-фолбек за замовчуванням. Раніше в

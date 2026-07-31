@@ -100,9 +100,17 @@ def _cave_to_dict(cave) -> dict:
     }
 
 
-# analysis-ключ -> (JSON-ключ у виводі); значення завжди простий
-# dataclass, тому йде через загальний _jsonify().
-_ANALYSIS_KEYS = ("openssl", "ffmpeg", "busybox", "runtime", "sdk_symbols", "codec_table")
+# analysis-ключ -> JSON-ключ у звіті. Значення кожного ключа — простий
+# dataclass, тому може серіалізуватися через загальний _jsonify().
+_ANALYSIS_KEYS = (
+    "openssl",
+    "ffmpeg",
+    "busybox",
+    "runtime",
+    "sdk_symbols",
+    "codec_table",
+    "squashfs",
+)
 
 
 def _node_to_dict(node: FirmwareNode) -> dict:

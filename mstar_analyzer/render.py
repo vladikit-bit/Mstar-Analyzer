@@ -5,6 +5,36 @@ from .string_filter import filter_strings
 from .renderers import RENDERERS
 from .renderers.summary import render_cross_tree_summary
 from .detectors.features import FEATURE_CONFIDENCE_MARKER
+from .analyzers.squashfs import SquashFsInfo
+
+
+def render_squashfs(summary: SquashFsInfo) -> None:
+    """
+    Render SquashFS filesystem metadata for a container node.
+
+    Called from render_node_analysis() via the RENDERERS registry.
+    """
+
+    if summary is None:
+        return
+
+    print()
+    print("SquashFS analysis")
+    print("-" * 70)
+
+    print(f"Version     : {summary.version}")
+    print(f"Endian      : {summary.endian}")
+    print(f"Compression : {summary.compression}")
+    print(f"Block size  : {summary.block_size:,} bytes")
+    print(f"Inode count : {summary.inode_count}")
+    print(f"Image size  : {summary.image_size:,} bytes")
+
+
+# Register the SquashFS renderer in the shared RENDERERS dict so that
+# render_node_analysis() picks it up automatically — consistent with
+# the existing ffmpeg/openssl/runtime/sdk_symbols renderers, and no
+# changes needed to render_node_analysis() itself.
+RENDERERS["squashfs"] = render_squashfs
 
 
 def render_tree(root: FirmwareNode) -> None:
