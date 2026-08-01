@@ -9,13 +9,14 @@ import struct
 import unittest
 import zlib
 
-from mstar_analyzer.detectors.objects import EmbeddedObject
+from mstar_analyzer.detectors.objects import EmbeddedObject, detect_uimage
 from mstar_analyzer.object_analyzer import (
     analyze_dtb,
     analyze_elf,
     analyze_jpeg,
     analyze_lua,
     analyze_png,
+    analyze_uimage,
 )
 
 
@@ -618,6 +619,107 @@ class DtbHeaderTests(unittest.TestCase):
         analyze_dtb(obj, header + b"\x00" * 60)
         self.assertFalse(obj.validated)
         self.assertTrue(any("last_comp_version" in issue for issue in obj.metadata["header_issues"]))
+
+
+def _build_uimage(name=b"linux-3.13.0", payload=b"KERNELDATA" * 100, little=False):
+    """Спец-коректний .uimage з правильними ih_hcrc/ih_dcrc (CRC32)."""
+
+    order = "<" if little else ">"
+    magic = 0x27051956
+    os_type, arch, img_type, comp = 5, 2, 2, 0  # Linux, ARM, kernel, none
+    dcrc = zlib.crc32(payload) & 0xFFFFFFFF
+
+    name_field = name + b"\x00" * (32 - len(name))
+    header_wo_hcrc = (
+        struct.pack(f"{order}I", magic)
+        + b"\x00\x00\x00\x00"
+        + struct.pack(f"{order}5I", 0x12345678, len(payload), 0x80008000, 0x80008000, dcrc)
+        + bytes([os_type, arch, img_type, comp])
+        + name_field
+    )
+    hcrc = zlib.crc32(header_wo_hcrc) & 0xFFFFFFFF
+    header = struct.pack(f"{order}I", magic) + struct.pack(f"{order}I", hcrc) + header_wo_hcrc[8:]
+
+    return header + payload
+
+
+class UImageHeaderTests(unittest.TestCase):
+    """
+    Формат перевірений за офіційним джерелом U-Boot (github.com/u-boot/
+    u-boot include/image.h) та незалежно — Kaitai Struct format spec.
+    64-байтний заголовок, мережевий порядок байтів (big-endian) для
+    всіх 32-бітних полів.
+    """
+
+    def test_valid_uimage_extracts_metadata(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="uImage", description="U-Boot legacy image header")
+        analyze_uimage(obj, _build_uimage())
+        self.assertTrue(obj.validated)
+        self.assertEqual(obj.metadata["name"], "linux-3.13.0")
+        self.assertEqual(obj.metadata["os"], "Linux")
+        self.assertEqual(obj.metadata["architecture"], "ARM")
+        self.assertEqual(obj.metadata["type"], "OS Kernel Image")
+        self.assertEqual(obj.metadata["compression"], "None")
+        self.assertEqual(obj.metadata["endianness"], "big")
+
+    def test_header_and_data_crc_validated_correctly(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="uImage", description="U-Boot legacy image header")
+        analyze_uimage(obj, _build_uimage())
+        self.assertTrue(obj.metadata["header_crc_valid"])
+        self.assertTrue(obj.metadata["data_crc_valid"])
+
+    def test_corrupted_payload_fails_data_crc_but_header_still_valid(self):
+        img = bytearray(_build_uimage())
+        img[-1] ^= 0xFF  # псуємо останній байт payload, заголовок не чіпаємо
+        obj = EmbeddedObject(offset=0, size=None, kind="uImage", description="U-Boot legacy image header")
+        analyze_uimage(obj, bytes(img))
+        self.assertTrue(obj.validated)  # структура заголовка й далі коректна
+        self.assertTrue(obj.metadata["header_crc_valid"])
+        self.assertFalse(obj.metadata["data_crc_valid"])
+
+    def test_little_endian_variant_detected(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="uImage", description="U-Boot legacy image header")
+        analyze_uimage(obj, _build_uimage(little=True))
+        self.assertTrue(obj.validated)
+        self.assertEqual(obj.metadata["endianness"], "little")
+        self.assertTrue(obj.metadata["header_crc_valid"])
+
+    def test_unaligned_offsets_all_parse_identically(self):
+        img = _build_uimage()
+        for offset in (0, 1, 2, 3, 4, 55, 133):
+            data = b"\xAB" * offset + img
+            obj = EmbeddedObject(offset=offset, size=None, kind="uImage", description="U-Boot legacy image header")
+            analyze_uimage(obj, data)
+            self.assertTrue(obj.validated, f"failed at offset={offset}")
+            self.assertEqual(obj.metadata["name"], "linux-3.13.0", f"wrong result at offset={offset}")
+
+    def test_truncated_header_rejected(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="uImage", description="U-Boot legacy image header")
+        analyze_uimage(obj, _build_uimage()[:30])
+        self.assertFalse(obj.validated)
+        self.assertEqual(obj.metadata["reason"], "truncated_header")
+
+    def test_size_exceeding_available_data_rejected(self):
+        img = _build_uimage()
+        obj = EmbeddedObject(offset=0, size=None, kind="uImage", description="U-Boot legacy image header")
+        analyze_uimage(obj, img[:64])  # лише заголовок, без payload
+        self.assertFalse(obj.validated)
+        self.assertTrue(any("ih_size" in issue for issue in obj.metadata["header_issues"]))
+
+    def test_unknown_enum_values_labeled_not_dropped(self):
+        img = bytearray(_build_uimage())
+        img[28] = 255  # ih_os за межами відомої таблиці (28 = 7*4, після 7 uint32-полів)
+        obj = EmbeddedObject(offset=0, size=None, kind="uImage", description="U-Boot legacy image header")
+        analyze_uimage(obj, bytes(img))
+        self.assertTrue(obj.validated)  # невідомий enum — не структурна помилка
+        self.assertEqual(obj.metadata["os"], "unknown (255)")
+
+    def test_detect_uimage_finds_both_endianness_magics(self):
+        data = _build_uimage()[:20] + b"\x00" * 40 + _build_uimage(little=True)
+        objects = detect_uimage(data)
+        offsets = sorted(o.offset for o in objects)
+        self.assertEqual(len(objects), 2)
+        self.assertEqual(offsets, [0, 60])
 
 
 if __name__ == "__main__":

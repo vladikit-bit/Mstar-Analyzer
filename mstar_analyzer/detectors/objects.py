@@ -255,6 +255,54 @@ def detect_dtb(data: bytes) -> list[EmbeddedObject]:
     return objects
 
 
+UIMAGE_MAGIC_BE = b"\x27\x05\x19\x56"
+
+# Той самий magic, але побайтово перевернутий — нестандартний варіант,
+# якого офіційна специфікація U-Boot не передбачає (заголовок ЗАВЖДИ
+# мережевого порядку байтів незалежно від архітектури цілі), але який
+# MagicScanner (signatures.py) вже ловив окремим записом "uImage (LE)"
+# до цього — тож детектор і далі розпізнає обидва варіанти, а
+# object_analyzer.analyze_uimage() визначає порядок байтів решти полів
+# за тим, яка саме сигнатура збіглась.
+UIMAGE_MAGIC_LE = b"\x56\x19\x05\x27"
+
+
+def detect_uimage(data: bytes) -> list[EmbeddedObject]:
+    """
+    U-Boot legacy image header (IH_MAGIC = 0x27051956, image.h у
+    вихідному коді U-Boot). MStar MBoot — задокументований у коментарях
+    цього проєкту як "видозмінений U-Boot" — тож той самий формат
+    заголовка цілком може трапитись у прошивці окремо від власне
+    MBoot-специфічного env-блоку (детектор/аналізатор якого вже є).
+    """
+
+    objects: list[EmbeddedObject] = []
+
+    for magic in (UIMAGE_MAGIC_BE, UIMAGE_MAGIC_LE):
+
+        pos = 0
+
+        while True:
+
+            pos = data.find(magic, pos)
+
+            if pos == -1:
+                break
+
+            objects.append(
+                EmbeddedObject(
+                    offset=pos,
+                    size=None,
+                    kind="uImage",
+                    description="U-Boot legacy image header",
+                )
+            )
+
+            pos += 4
+
+    return objects
+
+
 DETECTORS = (
     detect_png,
     detect_jpeg,
@@ -262,4 +310,5 @@ DETECTORS = (
     detect_elf,
     detect_mboot_env_block,
     detect_dtb,
+    detect_uimage,
 )

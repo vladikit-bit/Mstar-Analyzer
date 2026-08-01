@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 import struct
+import zlib
 
 from .detectors.objects import EmbeddedObject
 
@@ -37,6 +38,9 @@ def analyze_objects(
 
         elif obj.kind == "DTB":
             analyze_dtb(obj, data)
+
+        elif obj.kind == "uImage":
+            analyze_uimage(obj, data)
 
         elif obj.kind == "MBootEnvBlock":
             analyze_mboot_env_block(obj, data)
@@ -1267,6 +1271,185 @@ def _read_dtb_root_properties(
         props[prop_name] = decoded[0] if len(decoded) == 1 else decoded
 
     return props
+
+
+# ============================================================================
+# U-Boot legacy image (uImage)
+# ============================================================================
+#
+# Заголовок (include/image.h у вихідному коді U-Boot, перевірено за
+# github.com/u-boot/u-boot та незалежно — Kaitai Struct format spec
+# formats.kaitai.io/uimage) — 64 байти, мережевий порядок байтів
+# (big-endian) для ВСІХ 32-бітних полів НЕЗАЛЕЖНО від архітектури
+# цільового CPU (той самий принцип, що й DTB вище — формат читається
+# завантажувачем ДО того, як CPU переходить у робочий режим):
+#
+#   ih_magic(4) + ih_hcrc(4) + ih_time(4) + ih_size(4) + ih_load(4) +
+#   ih_ep(4) + ih_dcrc(4) + ih_os(1) + ih_arch(1) + ih_type(1) +
+#   ih_comp(1) + ih_name(32)
+#
+# ih_hcrc/ih_dcrc — CRC32 заголовка (з обнуленим самим полем ih_hcrc на
+# момент обчислення) і CRC32 даних відповідно. Це не лише структурна
+# перевірка — збіг CRC є набагато сильнішим підтвердженням, ніж просто
+# "байти виглядають правдоподібно": випадковий збіг 4-байтного magic
+# практично не матиме коректного CRC поверх нього.
+
+UIMAGE_HEADER_SIZE = 64
+UIMAGE_MAGIC = 0x27051956
+UIMAGE_NAME_OFFSET = 32
+UIMAGE_NAME_LEN = 32
+
+# Таблиці enum — повні, звірені з офіційного джерела (не скорочені
+# "найпоширеніші значення"): невідоме значення тут із високою
+# ймовірністю означає або новіший U-Boot з типом, доданим після цього
+# запису, або справді пошкоджені дані — обидва варіанти чесно
+# відображаються як "unknown (N)", а не мовчки відкидаються.
+UIMAGE_OS_NAMES = {
+    0: "Invalid", 1: "OpenBSD", 2: "NetBSD", 3: "FreeBSD", 4: "4.4BSD",
+    5: "Linux", 6: "SVR4", 7: "Esix", 8: "Solaris", 9: "Irix", 10: "SCO",
+    11: "Dell", 12: "NCR", 13: "LynxOS", 14: "VxWorks", 15: "pSOS",
+    16: "QNX", 17: "Firmware", 18: "RTEMS", 19: "ARTOS", 20: "Unity OS",
+    21: "INTEGRITY", 22: "OSE", 23: "Plan 9", 24: "OpenRTOS",
+    25: "ARM Trusted Firmware", 26: "Trusted Execution Environment",
+    27: "RISC-V OpenSBI", 28: "EFI Firmware (e.g. GRUB2)",
+}
+
+UIMAGE_ARCH_NAMES = {
+    0: "Invalid", 1: "Alpha", 2: "ARM", 3: "Intel x86", 4: "IA64",
+    5: "MIPS", 6: "MIPS 64-bit", 7: "PowerPC", 8: "IBM S390", 9: "SuperH",
+    10: "Sparc", 11: "Sparc 64-bit", 12: "M68K", 13: "Nios-32",
+    14: "MicroBlaze", 15: "Nios-II", 16: "Blackfin", 17: "AVR32",
+    18: "STMicroelectronics ST200", 19: "Sandbox (test only)",
+    20: "ANDES NDS32", 21: "OpenRISC 1000", 22: "ARM64",
+    23: "Synopsys DesignWare ARC", 24: "AMD x86_64 / Intel / Via",
+    25: "Xtensa", 26: "RISC-V",
+}
+
+UIMAGE_TYPE_NAMES = {
+    0: "Invalid", 1: "Standalone Program", 2: "OS Kernel Image",
+    3: "RAMDisk Image", 4: "Multi-File Image", 5: "Firmware Image",
+    6: "Script file", 7: "Filesystem Image", 8: "Binary Flat Device Tree Blob",
+    9: "Kirkwood Boot Image", 10: "Freescale IMXBoot Image",
+    11: "Davinci UBL Image", 12: "TI OMAP Config Header Image",
+    13: "TI Davinci AIS Image", 14: "OS Kernel Image (any load address)",
+    15: "Freescale PBL Boot Image", 16: "Freescale MXSBoot Image",
+    17: "TI Keystone GPHeader Image", 18: "ATMEL ROM bootable Image",
+    19: "Altera SOCFPGA CV/AV Preloader", 20: "x86 setup.bin Image",
+    21: "lpc32xx Image", 22: "A list of typeless images",
+    23: "Rockchip Boot Image", 24: "Rockchip SD card",
+    25: "Rockchip SPI image", 26: "Xilinx Zynq Boot Image",
+    27: "Xilinx ZynqMP Boot Image", 28: "Xilinx ZynqMP Boot Image (bif)",
+    29: "FPGA Image", 30: "VYBRID .vyb Image",
+    31: "Trusted Execution Environment OS Image",
+    32: "Firmware Image with HABv4 IVT",
+    33: "TI Power Management Micro-Controller Firmware",
+    34: "STMicroelectronics STM32 Image",
+    35: "Altera SOCFPGA A10 Preloader",
+    36: "MediaTek BootROM loadable Image",
+    37: "Freescale IMX8MBoot Image", 38: "Freescale IMX8Boot Image",
+    39: "Coprocessor Image for remoteproc", 40: "Allwinner eGON Boot Image",
+}
+
+UIMAGE_COMP_NAMES = {
+    0: "None", 1: "gzip", 2: "bzip2", 3: "lzma", 4: "lzo", 5: "lz4", 6: "zstd",
+}
+
+
+def analyze_uimage(obj: EmbeddedObject, data: bytes) -> None:
+
+    pos = obj.offset
+
+    header = data[pos:pos + UIMAGE_HEADER_SIZE]
+
+    if len(header) < UIMAGE_HEADER_SIZE:
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "truncated_header"
+        return
+
+    magic_bytes = header[:4]
+
+    if magic_bytes == b"\x27\x05\x19\x56":
+        order = ">"
+        endianness = "big"
+    elif magic_bytes == b"\x56\x19\x05\x27":
+        order = "<"
+        endianness = "little"
+    else:
+        # Детектор уже гарантує один із цих двох варіантів на цьому
+        # offset — сюди можна потрапити лише при виклику analyze_uimage
+        # напряму з іншим offset, тому це не "issues", а окрема
+        # відмова.
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "truncated_header"
+        return
+
+    (
+        magic,
+        hcrc,
+        timestamp,
+        size,
+        load,
+        ep,
+        dcrc,
+        os_type,
+        arch,
+        img_type,
+        comp,
+    ) = struct.unpack(f"{order}7I4B", header[:32])
+
+    name_bytes = header[UIMAGE_NAME_OFFSET:UIMAGE_NAME_OFFSET + UIMAGE_NAME_LEN]
+    name = name_bytes.split(b"\x00", 1)[0].decode("ascii", "replace")
+
+    available = len(data) - pos
+
+    obj.metadata.update(
+        {
+            "endianness": endianness,
+            "os": UIMAGE_OS_NAMES.get(os_type, f"unknown ({os_type})"),
+            "architecture": UIMAGE_ARCH_NAMES.get(arch, f"unknown ({arch})"),
+            "type": UIMAGE_TYPE_NAMES.get(img_type, f"unknown ({img_type})"),
+            "compression": UIMAGE_COMP_NAMES.get(comp, f"unknown ({comp})"),
+            "name": name,
+            "data_size": size,
+            "load_address": f"0x{load:08X}",
+            "entry_point": f"0x{ep:08X}",
+        }
+    )
+
+    issues: list[str] = []
+
+    if UIMAGE_HEADER_SIZE + size > available:
+        issues.append(
+            f"ih_size={size} виходить за межі доступних даних "
+            f"(потрібно {UIMAGE_HEADER_SIZE + size}, доступно {available})"
+        )
+
+    if issues:
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "implausible_header_fields"
+        obj.metadata["header_issues"] = issues
+        return
+
+    obj.size = UIMAGE_HEADER_SIZE + size
+
+    # CRC — інформаційно, а не жорстка умова валідності: якщо дані
+    # частково обрізані власним пайплайном розпакування (Stage 5), це
+    # НЕ означає, що заголовок несправжній, лише що ми не бачимо повний
+    # payload. Заголовок сам по собі вже пройшов структурну перевірку
+    # вище незалежно від результату цих двох прапорців.
+    header_for_crc = bytearray(header[:UIMAGE_HEADER_SIZE])
+    header_for_crc[4:8] = b"\x00\x00\x00\x00"
+    obj.metadata["header_crc_valid"] = (zlib.crc32(bytes(header_for_crc)) & 0xFFFFFFFF) == hcrc
+
+    payload = data[pos + UIMAGE_HEADER_SIZE: pos + UIMAGE_HEADER_SIZE + size]
+
+    if len(payload) == size:
+        obj.metadata["data_crc_valid"] = (zlib.crc32(payload) & 0xFFFFFFFF) == dcrc
+    else:
+        obj.metadata["data_crc_valid"] = None
 
 
 def analyze_dtb(obj: EmbeddedObject, data: bytes) -> None:
