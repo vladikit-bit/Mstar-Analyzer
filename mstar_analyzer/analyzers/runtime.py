@@ -115,12 +115,32 @@ LIBC_SIGNATURES = (
 
     ("newlib", "newlib"),
 
+    # "ecospro" ПЕРЕД "ecos_os" навмисно: реальні шляхи збірки містять
+    # ОБИДВА підрядки в одному рядку одразу (напр.
+    # ".../ecos_os/stb_ecospro/packages/..."), а матчинг нижче зупиняється
+    # на першому збігові в цьому списку (break) — тож порядок тут прямо
+    # визначає, який лейбл дістане рядок, що містить обидва варіанти.
+    ("ecospro", "eCos Pro"),
     ("ecos_os", "eCos"),
-    ("ecospro", "eCos"),
 
     ("bionic", "Android Bionic"),
 
 )
+
+# "eCos Pro" (комерційний варіант від eCosCentric) — специфічніший доказ,
+# ніж голе "eCos". Без цієї таблиці "перший збіг перемагає" (типова
+# логіка нижче: `if info.libc is None: info.libc = libc`) означало б, що
+# порядок обробки РЯДКІВ (а не сигнатур) вирішує результат: якщо рядок
+# лише з "ecos_os" трапиться раніше за рядок з "ecospro", лейбл
+# застрягне на генеричному "eCos" назавжди, навіть коли пізніше
+# з'явиться точніший доказ. Тут — дозволяємо ТІЛЬКИ підвищення
+# (eCos -> eCos Pro), ніколи пониження, і лише для цієї пари; решта
+# libc (glibc/uClibc/musl/...) і далі просто "перший збіг" — між ними
+# немає стосунку "загальне/специфічне".
+LIBC_LABEL_PRIORITY: dict[str, int] = {
+    "eCos": 0,
+    "eCos Pro": 1,
+}
 
 # eCos-збірки традиційно кладуть кожен пакет під шлях виду
 # ".../packages/io/serial/v2_0_60/src/..." — версія пакета в самому
@@ -272,7 +292,10 @@ def analyze_runtime(
 
             if signature in text:
 
-                if info.libc is None:
+                if info.libc is None or (
+                    LIBC_LABEL_PRIORITY.get(libc, 0)
+                    > LIBC_LABEL_PRIORITY.get(info.libc, 0)
+                ):
                     info.libc = libc
 
                 if len(info.libc_evidence) < MAX_EVIDENCE:

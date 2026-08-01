@@ -122,5 +122,47 @@ class EcosPackageInventoryTests(unittest.TestCase):
         self.assertEqual(info.ecos_packages, {})
 
 
+class EcosProDetectionTests(unittest.TestCase):
+    """
+    "ecospro" раніше мапився на той самий лейбл "eCos", що й generic
+    "ecos_os" — розрізнення губилось, хоча реальні шляхи збірки
+    (".../ecos_os/stb_ecospro/packages/...") містять пряму, однозначну
+    підказку про комерційний eCosPro (eCosCentric), а не звичайний
+    open-source eCos.
+    """
+
+    def test_real_path_with_both_substrings_detected_as_ecos_pro(self):
+        text = "/home/tao.yang/ecos_os/stb_ecospro/packages/io/serial/v2_0_60/src/common/serial.c"
+        info = analyze_runtime([_finding(text)])
+        self.assertEqual(info.libc, "eCos Pro")
+
+    def test_generic_only_evidence_stays_plain_ecos(self):
+        info = analyze_runtime([_finding("mipsisa32-elf-gcc -D ECOS_OS -mips16")])
+        self.assertEqual(info.libc, "eCos")
+
+    def test_generic_evidence_first_then_ecospro_upgrades(self):
+        # Регресія: "перший збіг перемагає" не повинно назавжди
+        # заблокувати лейбл на generic "eCos", якщо специфічніший доказ
+        # (ecospro) трапляється в рядку, обробленому ПІЗНІШЕ.
+        strings = [
+            _finding("/home/x/ecos_os/packages/net/dns/v2_0_1/src/dns.c"),
+            _finding("/home/x/stb_ecospro/packages/net/tcpip/v2_0_1/src/tcp.c"),
+        ]
+        info = analyze_runtime(strings)
+        self.assertEqual(info.libc, "eCos Pro")
+
+    def test_ecospro_evidence_first_then_generic_does_not_downgrade(self):
+        strings = [
+            _finding("/home/x/stb_ecospro/packages/net/tcpip/v2_0_1/src/tcp.c"),
+            _finding("/home/x/ecos_os/packages/net/dns/v2_0_1/src/dns.c"),
+        ]
+        info = analyze_runtime(strings)
+        self.assertEqual(info.libc, "eCos Pro")
+
+    def test_other_libc_pairs_unaffected(self):
+        info = analyze_runtime([_finding("GNU C Library glibc-2.31 stable build")])
+        self.assertEqual(info.libc, "glibc")
+
+
 if __name__ == "__main__":
     unittest.main()

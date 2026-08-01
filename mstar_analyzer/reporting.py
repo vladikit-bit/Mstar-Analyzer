@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .analyzers.runtime import LIBC_LABEL_PRIORITY
 from .detectors.features import FEATURE_CATEGORIES
 from .firmware_tree import FirmwareNode
 
@@ -149,7 +150,10 @@ def collect_runtime(root: FirmwareNode) -> RuntimeSummary | None:
         if info is None:
             continue
 
-        if summary.libc is None and info.libc:
+        if info.libc and (
+            summary.libc is None
+            or LIBC_LABEL_PRIORITY.get(info.libc, 0) > LIBC_LABEL_PRIORITY.get(summary.libc, 0)
+        ):
             summary.libc = info.libc
 
         summary.libc_package_versions.update(info.libc_package_versions)
