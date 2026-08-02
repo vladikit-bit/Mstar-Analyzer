@@ -130,6 +130,7 @@ def analyze_node(node: FirmwareNode, depth: int = 0) -> None:
                         name=result.method,
                         offset=result.offset,
                         data=result.data,
+                        metadata={"raw_consumed_bytes": result.consumed},
                     )
                     # Pass filesystem metadata to the container node before
                     # classification, so classifiers can use it in the future.
@@ -175,6 +176,7 @@ def analyze_node(node: FirmwareNode, depth: int = 0) -> None:
                 name=result.method,
                 offset=result.offset,
                 data=result.data,
+                metadata={"raw_consumed_bytes": result.consumed},
             )
 
             classify_node(child)
