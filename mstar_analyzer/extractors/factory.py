@@ -4,6 +4,7 @@ from .base import Extractor
 from .lzma import LZMAExtractor
 from .gzip import GZipExtractor
 from .xz import XZExtractor
+from .zlib import ZlibExtractor
 from .bzip2 import BZip2Extractor
 from .squashfs import SquashFsExtractor
 from ..signatures import Finding
@@ -20,6 +21,13 @@ _EXTRACTOR_BY_NAME: dict[str, type[Extractor]] = {
     "gzip": GZipExtractor,
     "xz": XZExtractor,
     "bzip2": BZip2Extractor,
+    # ZlibExtractor сам по собі існував і був покритий тестами
+    # (tests/test_stream_extractors.py) задовго до цього запису — але
+    # без нього ExtractorFactory.for_finding() ніколи не знаходив
+    # extractor для Finding.name="zlib" (ZlibHeuristicScanner,
+    # signatures.py), тож жоден candidate для сирого zlib-потоку
+    # ніколи не будувався.
+    "zlib": ZlibExtractor,
     "SquashFS (LE)": SquashFsExtractor,
     "SquashFS (BE)": SquashFsExtractor,
 }

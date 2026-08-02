@@ -14,7 +14,7 @@ import struct
 import unittest
 
 from mstar_analyzer.firmware_map import MapEntry, _dedupe_lzma_findings
-from mstar_analyzer.signatures import LzmaHeuristicScanner
+from mstar_analyzer.signatures import LzmaHeuristicScanner, ZlibHeuristicScanner
 
 
 class DedupeLzmaFindingsTests(unittest.TestCase):
@@ -67,6 +67,34 @@ class DedupeLzmaFindingsTests(unittest.TestCase):
         deduped = _dedupe_lzma_findings(entries)
         self.assertEqual(len(deduped), 1)
         self.assertEqual(deduped[0].confidence, "medium")
+
+    def test_zlib_cluster_also_collapses(self):
+        """
+        ZlibHeuristicScanner (доданий разом із цим тестом) підключений
+        до build_firmware_map() через той самий _dedupe_lzma_findings,
+        що й LZMA — реальний zlib-потік одразу за заголовком сам є
+        стисненими (тобто фактично випадковими) байтами, тому дає той
+        самий клас overlapping-спрацювань.
+        """
+        import zlib
+
+        blob = zlib.compress(b"payload " * 200, 9)
+        raw = ZlibHeuristicScanner().scan(blob)
+
+        self.assertGreaterEqual(
+            len(raw), 1, "test setup did not produce any zlib findings",
+        )
+
+        entries = [
+            MapEntry(offset=f.offset, kind=f.name, confidence=f.confidence, detail=f.detail)
+            for f in raw
+        ]
+        deduped = _dedupe_lzma_findings(entries)
+
+        # Незалежно від того, скільки overlapping-спрацювань дав сирий
+        # скан, реальний потік один — і його заголовок починається з 0.
+        self.assertEqual(deduped[0].offset, 0)
+        self.assertEqual(deduped[0].kind, "zlib")
 
 
 if __name__ == "__main__":

@@ -307,6 +307,128 @@ class LzmaHeuristicScanner(Scanner):
         return findings
     
 # ============================================================================
+# Zlib heuristic scanner
+# ============================================================================
+
+def _zlib_header_ok(cmf: int, flg: int) -> bool:
+    """
+    RFC 1950 §2.2: CMF/FLG, 2-байтний заголовок сирого zlib/deflate потоку.
+    """
+
+    if (cmf & 0x0F) != 8:
+        # CM (compression method) — 8 = deflate, єдиний метод, який
+        # реально трапляється (інші значення специфікація залишає
+        # невизначеними). Без цього кожен другий випадковий байт
+        # проходив би далі.
+        return False
+
+    cinfo = (cmf >> 4) & 0x0F
+
+    if cinfo > 7:
+        # CINFO кодує log2(window_size) - 8. RFC дозволяє й більші
+        # значення для CM=8, але на практиці (zlib/miniz/vendor-порти)
+        # вікно ніколи не перевищує 32 KiB (CINFO=7) — значення 8-15
+        # тут майже напевно випадковий байт, що випадково пройшов
+        # checksum нижче.
+        return False
+
+    if (flg >> 5) & 1:
+        # FDICT: перед стисненими даними йшов би ще 4-байтний DICTID
+        # (ідентифікатор preset dictionary). Прошивки цим на практиці
+        # не користуються — а без реального dictionary ID перевірити
+        # FDICT-кандидата все одно нічим, тож він лише додав би шуму.
+        return False
+
+    return (cmf * 256 + flg) % 31 == 0
+
+
+class ZlibHeuristicScanner(Scanner):
+    """
+    Пошук сирого zlib/deflate потоку (RFC 1950) — на відміну від gzip/xz/
+    bzip2 (MagicScanner, фіксовані 3-6-байтні magic), у zlib немає
+    окремого magic number: лише 2-байтний CMF/FLG заголовок із
+    контрольною сумою (cmf*256+flg) % 31 == 0.
+
+    2 байти дають набагато вищу базову ймовірність випадкового
+    структурно-валідного збігу, ніж magic-сигнатури (порядку 1/2048 на
+    позицію серед CM=8/CINFO<=7 заголовків, а не ~1/2^24+ як у gzip/xz).
+    Тому, так само як LzmaHeuristicScanner: викликається лише всередині
+    high-entropy регіонів (firmware_map.py), а не по всьому файлу — це
+    і на порядки швидше, і різко знижує кількість випадкових
+    спрацювань на структурованих/малоентропійних ділянках, де справжній
+    zlib-потік однаково не зустрінеться.
+
+    ZlibExtractor (extractors/zlib.py) — сама декомпресія — існував і
+    був покритий тестами задовго до цього сканера, але без Finding із
+    цим ім'ям ("zlib") жоден candidate ніколи не будувався: Stage 2
+    просто не мав звідки його взяти. Цей сканер закриває саме цю
+    прогалину.
+
+    Stage 2 лише знаходить кандидата. Остаточне підтвердження — реальна
+    декомпресія в Stage 5 (ExtractorFactory реєструє "zlib" ->
+    ZlibExtractor, extractors/factory.py).
+    """
+
+    name = "zlib-heuristic"
+
+    MIN_HEADER = 2
+
+    def scan(self, data: bytes) -> list[Finding]:
+
+        findings: list[Finding] = []
+
+        n = len(data)
+
+        if n < self.MIN_HEADER:
+            return findings
+
+        limit = n - self.MIN_HEADER + 1
+
+        for offset in range(limit):
+
+            cmf = data[offset]
+            flg = data[offset + 1]
+
+            if not _zlib_header_ok(cmf, flg):
+                continue
+
+            # ---------------------------------------------------------
+            # Додаткова евристика, симетрична LzmaHeuristicScanner.
+            #
+            # Після заголовка має бути хоча б кілька ненульових байтів —
+            # відкидає найочевидніший шум (прогін заповнювача 0x00,
+            # два байти якого випадково пройшли checksum: cmf=0x00
+            # трапляється рідко через вимогу CM=8, але зустрічний
+            # 0x08/0x?? заповнювач — цілком можливий випадковий збіг).
+            # ---------------------------------------------------------
+
+            payload = data[offset + 2 : offset + 6]
+
+            if len(payload) < 4:
+                continue
+
+            if payload == b"\x00" * len(payload):
+                continue
+
+            cinfo = (cmf >> 4) & 0x0F
+            flevel = (flg >> 6) & 0x03
+
+            findings.append(
+                Finding(
+                    offset=offset,
+                    name="zlib",
+                    confidence="medium",
+                    detail=(
+                        f"cinfo={cinfo} "
+                        f"(window={1 << (cinfo + 8)}) "
+                        f"flevel={flevel}"
+                    ),
+                )
+            )
+
+        return findings
+
+# ============================================================================
 # JFFS2 Scanner
 # ============================================================================
 
@@ -416,6 +538,8 @@ DEFAULT_SCANNERS: tuple[Scanner, ...] = (
     AsciiMarkerScanner(),
 
     LzmaHeuristicScanner(),
+
+    ZlibHeuristicScanner(),
 
     Jffs2Scanner(),
     

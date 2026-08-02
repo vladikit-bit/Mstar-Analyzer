@@ -5,10 +5,10 @@ Stage 1 / Stage 4 — Firmware map / Chunk parser.
 розпаковування чи дизасемблювання. Об'єднує знахідки MagicScanner /
 AsciiMarkerScanner з ентропійними регіонами у єдину впорядковану карту.
 
-LzmaHeuristicScanner свідомо запускається лише всередині high-entropy
-областей (а не по всьому файлу) — це на порядки швидше та відповідає
-логіці "спочатку ентропія відкидає явно нецікаві зони, потім вже шукаємо
-LZMA-заголовок" .
+LzmaHeuristicScanner і ZlibHeuristicScanner свідомо запускаються лише
+всередині high-entropy областей (а не по всьому файлу) — це на порядки
+швидше та відповідає логіці "спочатку ентропія відкидає явно нецікаві
+зони, потім вже шукаємо LZMA/zlib-заголовок".
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .entropy import EntropyPoint, classify_region, high_entropy_regions, scan_entropy, sparkline
-from .signatures import AsciiMarkerScanner, LzmaHeuristicScanner, MagicScanner
+from .signatures import AsciiMarkerScanner, LzmaHeuristicScanner, MagicScanner, ZlibHeuristicScanner
 
 
 @dataclass
@@ -48,15 +48,23 @@ _CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
 
 def _dedupe_lzma_findings(findings: list[MapEntry], cluster_distance: int = 16) -> list[MapEntry]:
     """
-    LzmaHeuristicScanner неминуче дає overlapping-спрацювання: справжній
-    LZMA-заголовок на зсуві X майже завжди "частково" проходить
-    евристику ще й на X+1, X+2, ... (зсунувшись на кілька байт, поля
-    lc/lp/pb і dict-size все одно можуть випадково задовольнити
-    обмеження). Це один шумовий кластер, а не N незалежних потоків.
+    LzmaHeuristicScanner (і так само ZlibHeuristicScanner нижче)
+    неминуче дають overlapping-спрацювання: справжній заголовок на
+    зсуві X майже завжди "частково" проходить евристику ще й на
+    X+1, X+2, ... (зсунувшись на кілька байт, структурні поля все одно
+    можуть випадково задовольнити обмеження — а для самих СТИСНЕНИХ
+    даних одразу за заголовком це майже гарантовано, вони самі мають
+    вигляд випадкового шуму). Це один шумовий кластер, а не N
+    незалежних потоків.
 
     Групуємо сусідні знахідки (в межах `cluster_distance` байт одна від
     одної) і лишаємо з кожного кластера тільки одну — з найвищою
     confidence (а при рівності — найранішу).
+
+    Назва лишається "_lzma_findings" з історичних причин (і тому, що
+    tests/test_firmware_map.py вже імпортує її під цим ім'ям) — сама
+    логіка не специфічна до LZMA, це спільний dedup для будь-якого
+    byte-level евристичного сканера, що працює всередині одного вікна.
     """
 
     if not findings:
@@ -98,15 +106,26 @@ def build_firmware_map(data: bytes, entropy_window: int = 1024, lzma_confidence_
     # 2) ентропія по всьому файлу
     points = scan_entropy(data, window=entropy_window)
 
-    # 3) LZMA-евристика — тільки в межах high-entropy регіонів (сильно швидше і точніше)
+    # 3) LZMA- та zlib-евристики — тільки в межах high-entropy регіонів
+    #    (сильно швидше і точніше; обидва сканери мають високий базовий
+    #    рівень випадкових спрацювань на структурованих/малоентропійних
+    #    ділянках, де відповідного потоку однаково не буде).
     lzma_scanner = LzmaHeuristicScanner()
+    zlib_scanner = ZlibHeuristicScanner()
     for start, end in high_entropy_regions(points, threshold=lzma_confidence_threshold):
         window = data[start:end]
-        region_entries = [
+
+        lzma_entries = [
             MapEntry(offset=start + f.offset, kind=f.name, confidence=f.confidence, detail=f.detail)
             for f in lzma_scanner.scan(window)
         ]
-        entries.extend(_dedupe_lzma_findings(region_entries))
+        entries.extend(_dedupe_lzma_findings(lzma_entries))
+
+        zlib_entries = [
+            MapEntry(offset=start + f.offset, kind=f.name, confidence=f.confidence, detail=f.detail)
+            for f in zlib_scanner.scan(window)
+        ]
+        entries.extend(_dedupe_lzma_findings(zlib_entries))
 
     # 4) сирі "невідомі" регіони за класифікацією ентропії (empty/code/compressed/...)
     #    зводимо сусідні вікна одного класу у діапазони, щоб не засмічувати карту

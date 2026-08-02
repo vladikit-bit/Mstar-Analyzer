@@ -10,7 +10,10 @@ classify_node() отримує в node.name для кожного bzip2-розп
 дерево (firmware_tree.pretty()), JSON-звіт (json_export.py) та
 flash-розкладку (flash_layout.py).
 
-Тест перевіряє всі чотири компресори однаково, щоб той самий пропуск
+Заодно тут же перевіряється й "zlib" — новий запис, доданий разом із
+підключенням ZlibHeuristicScanner (signatures.py) до пайплайну.
+
+Тест перевіряє всі відомі компресори однаково, щоб той самий пропуск
 для нового компресора в майбутньому (напр. LZ4) впав тут, а не був
 виявлений лише вручну на реальній прошивці.
 """
@@ -36,6 +39,11 @@ class CompressionClassificationTests(unittest.TestCase):
         node = self._classify("bzip2")
         self.assertEqual(node.format, "bzip2")
         self.assertEqual(node.compression, "bzip2")
+
+    def test_zlib_gets_format_and_compression(self):
+        node = self._classify("zlib")
+        self.assertEqual(node.format, "zlib")
+        self.assertEqual(node.compression, "zlib")
 
     def test_gzip_gets_format_and_compression(self):
         node = self._classify("gzip")

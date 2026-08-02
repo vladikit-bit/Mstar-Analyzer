@@ -62,6 +62,7 @@ def collect_extract_candidates(fw_map):
             "gzip",
             "xz",
             "bzip2",
+            "zlib",
             "SquashFS (LE)",
             "SquashFS (BE)",
         ):

@@ -20,6 +20,9 @@ COMPRESSION_BY_NAME: dict[str, tuple[str, str]] = {
     # json_export.py віддає null замість "bzip2", а flash_layout.py
     # підміняє лейбл на "blob stream" замість "bzip2 stream".
     "bzip2": ("bzip2", "bzip2"),
+    # ZlibExtractor.method == "zlib" (extractors/zlib.py) — щойно
+    # підключений до Stage 2/5 (ZlibHeuristicScanner + factory.py).
+    "zlib": ("zlib", "zlib"),
 }
 
 
