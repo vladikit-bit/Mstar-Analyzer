@@ -38,6 +38,7 @@ Implemented features include:
 * SDK symbol profiling
 * MBoot Environment parser
 * Code Cave detection (experimental)
+* JFFS2 filesystem region detection (boundaries + node count; content extraction still planned — see Stage 3)
 * JSON export
 * Unit test suite
 
@@ -112,15 +113,20 @@ Goal:
 
 Automatically detect and unpack embedded filesystems.
 
+Done:
+
+* SquashFS (LE/BE, full extraction)
+
+In progress:
+
+* JFFS2 — region detection only (magic + header CRC validation, contiguous nodes grouped into filesystem regions); content parsing/extraction (file & directory listing) not yet implemented
+
 Planned:
 
-* SquashFS
 * CramFS
-* JFFS2
 * UBIFS
 * YAFFS
 * ROMFS
-* CRAMFS
 
 ---
 
@@ -184,6 +190,31 @@ Planned outputs:
 * Firmware comparison reports
 * Interactive dependency graphs
 * Statistical summaries
+
+---
+
+# Recently Activated Modules
+
+Some modules get implemented ahead of their integration point and are
+intentionally left disconnected from the main pipeline until the
+remaining concern is addressed. As of 2026-08 (see CHANGELOG.md for
+the full technical writeup):
+
+* **JFFS2 scanner** — implemented with full structural validation
+  (magic + header CRC32), integration into `build_firmware_map()`
+  intentionally postponed pending performance validation. The
+  original scanner walked every byte of the input in pure Python
+  (~3.1s on a 32 MB image); rewritten around a fast substring search
+  and activated. Currently detection-only — it reports JFFS2 region
+  boundaries and node counts, not file/directory contents (see
+  Stage 3 above).
+* **Zlib heuristic scanner** — `ZlibExtractor` was fully implemented
+  and unit-tested well before this, but no scanner ever produced a
+  matching `Finding` for it, so it was unreachable from a real
+  analysis run. Now wired up end-to-end.
+* **SDK fingerprinting / similarity engine** — a separate, ongoing
+  workstream (see *Research Topics* below), developed independently
+  and intentionally **not** touched by the activation work above.
 
 ---
 
