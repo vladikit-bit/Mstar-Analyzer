@@ -350,6 +350,49 @@ def _render_metadata_value(key: str, value: object, indent: str) -> None:
     if isinstance(value, (list, dict)) and not value:
         return
 
+    if key == "fit" and isinstance(value, dict):
+
+        # FIT (Flattened Image Tree, DTB із вузлами images/configurations)
+        # — генеричний "плаский словник" формат нижче тут не підходить:
+        # images/configurations самі по собі dict[ім'я -> dict властивостей],
+        # подвійна вкладеність, а не пара ключ-значення.
+        print(f"{indent}{key}:")
+
+        images = value.get("images")
+
+        if images:
+            print(f"{indent}    images:")
+            for name, props in images.items():
+                descriptor = ", ".join(
+                    str(props[k]) for k in ("type", "os", "arch", "compression") if props.get(k)
+                )
+                line = f"{indent}        {name}"
+                if props.get("description"):
+                    line += f": {props['description']}"
+                if descriptor:
+                    line += f" ({descriptor})"
+                print(line)
+
+        configurations = value.get("configurations")
+
+        if configurations:
+            print(f"{indent}    configurations:")
+            for name, props in configurations.items():
+                refs = ", ".join(
+                    f"{k}={props[k]}" for k in ("kernel", "firmware", "fdt", "ramdisk") if props.get(k)
+                )
+                line = f"{indent}        {name}"
+                if props.get("description"):
+                    line += f": {props['description']}"
+                if refs:
+                    line += f" ({refs})"
+                print(line)
+
+        if value.get("default_configuration"):
+            print(f"{indent}    default configuration: {value['default_configuration']}")
+
+        return
+
     if isinstance(value, dict):
 
         # Плаский словник (напр. DTB root_properties: model/compatible)

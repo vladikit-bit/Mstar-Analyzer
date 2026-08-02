@@ -147,6 +147,27 @@ class ObjectMetadataFormattingTests(unittest.TestCase):
         self.assertIn("model: mstar,titania", output)
         self.assertNotIn("{'model'", output)
 
+    def test_fit_metadata_renders_readable_not_repr(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        obj.metadata = {
+            "fit": {
+                "images": {
+                    "kernel": {"description": "Linux kernel", "type": "kernel", "os": "linux", "arch": "arm", "compression": "gzip"},
+                },
+                "configurations": {
+                    "conf-1": {"description": "default config", "kernel": "kernel", "fdt": "fdt-1"},
+                },
+                "default_configuration": "conf-1",
+            },
+        }
+        output = self._render_objects([obj])
+        self.assertIn("kernel", output)
+        self.assertIn("Linux kernel", output)
+        self.assertIn("conf-1", output)
+        self.assertIn("default configuration: conf-1", output)
+        self.assertNotIn("{'description'", output)
+        self.assertNotIn("{'kernel'", output)
+
     def test_empty_dict_metadata_prints_nothing_for_that_key(self):
         obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
         obj.metadata = {"root_properties": {}}

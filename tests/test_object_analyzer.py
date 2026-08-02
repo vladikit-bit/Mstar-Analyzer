@@ -722,5 +722,194 @@ class UImageHeaderTests(unittest.TestCase):
         self.assertEqual(offsets, [0, 60])
 
 
+class _DtbBuilder:
+    """Мінімальний, але точний за специфікацією .dtb token-stream builder — для тестів, що потребують реальної, валідної вкладеної структури (FIT), а не лише кореневих властивостей."""
+
+    def __init__(self):
+        self.struct_bytes = bytearray()
+        self.strings: list[str] = []
+        self._string_offsets: dict[str, int] = {}
+
+    def _nameoff(self, name: str) -> int:
+        if name not in self._string_offsets:
+            off = sum(len(s) + 1 for s in self.strings)
+            self._string_offsets[name] = off
+            self.strings.append(name)
+        return self._string_offsets[name]
+
+    def begin_node(self, name: str) -> "_DtbBuilder":
+        self.struct_bytes += struct.pack(">I", 1)
+        self.struct_bytes += name.encode() + b"\x00"
+        while len(self.struct_bytes) % 4:
+            self.struct_bytes += b"\x00"
+        return self
+
+    def end_node(self) -> "_DtbBuilder":
+        self.struct_bytes += struct.pack(">I", 2)
+        return self
+
+    def prop_str(self, name: str, value: str) -> "_DtbBuilder":
+        return self._prop_raw(name, value.encode() + b"\x00")
+
+    def prop_u32(self, name: str, value: int) -> "_DtbBuilder":
+        return self._prop_raw(name, struct.pack(">I", value))
+
+    def prop_bytes(self, name: str, data: bytes) -> "_DtbBuilder":
+        return self._prop_raw(name, data)
+
+    def _prop_raw(self, name: str, data: bytes) -> "_DtbBuilder":
+        nameoff = self._nameoff(name)
+        self.struct_bytes += struct.pack(">III", 3, len(data), nameoff)
+        self.struct_bytes += data
+        while len(self.struct_bytes) % 4:
+            self.struct_bytes += b"\x00"
+        return self
+
+    def build_dtb(self) -> bytes:
+        struct_bytes = bytes(self.struct_bytes) + struct.pack(">I", 9)  # FDT_END
+        strings_block = b"".join(s.encode() + b"\x00" for s in self.strings)
+
+        header_size = 40
+        off_mem_rsvmap = header_size
+        mem_rsvmap = struct.pack(">QQ", 0, 0)
+        off_dt_struct = off_mem_rsvmap + len(mem_rsvmap)
+        off_dt_strings = off_dt_struct + len(struct_bytes)
+        totalsize = off_dt_strings + len(strings_block)
+
+        header = struct.pack(
+            ">10I", 0xD00DFEED, totalsize, off_dt_struct, off_dt_strings,
+            off_mem_rsvmap, 17, 16, 0, len(strings_block), len(struct_bytes),
+        )
+        return header + mem_rsvmap + struct_bytes + strings_block
+
+
+def _build_fit(kernel_data: bytes = b"KERNELBYTES" * 20) -> bytes:
+    """Спец-коректний за офіційною документацією U-Boot (docs.u-boot.org
+    .../usage/fit/source_file_format.html) FIT-образ: kernel + fdt-1 у
+    images, один config у configurations."""
+
+    b = _DtbBuilder()
+    b.begin_node("")
+    b.prop_str("description", "test FIT image")
+    b.prop_u32("timestamp", 0x12345678)
+    b.prop_u32("#address-cells", 1)
+
+    b.begin_node("images")
+    b.begin_node("kernel")
+    b.prop_str("description", "Linux kernel")
+    b.prop_str("type", "kernel")
+    b.prop_str("arch", "arm")
+    b.prop_str("os", "linux")
+    b.prop_str("compression", "gzip")
+    b.prop_bytes("data", kernel_data)
+    b.end_node()
+    b.begin_node("fdt-1")
+    b.prop_str("description", "flat device tree")
+    b.prop_str("type", "flat_dt")
+    b.prop_str("arch", "arm")
+    b.prop_str("compression", "none")
+    b.prop_bytes("data", b"DTBBYTES" * 10)
+    b.end_node()
+    b.end_node()  # images
+
+    b.begin_node("configurations")
+    b.prop_str("default", "conf-1")
+    b.begin_node("conf-1")
+    b.prop_str("description", "default config")
+    b.prop_str("kernel", "kernel")
+    b.prop_str("fdt", "fdt-1")
+    b.end_node()
+    b.end_node()  # configurations
+
+    b.end_node()  # root
+
+    return b.build_dtb()
+
+
+class FitImageTests(unittest.TestCase):
+    """
+    FIT (Flattened Image Tree) — формат перевірений за офіційною
+    документацією U-Boot (docs.u-boot.org/.../usage/fit/
+    source_file_format.html): DTB із конкретною угодою про структуру —
+    підвузли "images" (компонент на kernel/fdt/ramdisk/...) та
+    "configurations" (комбінації образів + default).
+    """
+
+    def test_valid_fit_detected_with_images_and_configurations(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, _build_fit())
+        self.assertTrue(obj.validated)
+        fit = obj.metadata.get("fit")
+        self.assertIsNotNone(fit)
+        self.assertIn("kernel", fit["images"])
+        self.assertIn("fdt-1", fit["images"])
+
+    def test_image_properties_extracted_correctly(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, _build_fit())
+        kernel = obj.metadata["fit"]["images"]["kernel"]
+        self.assertEqual(kernel["type"], "kernel")
+        self.assertEqual(kernel["os"], "linux")
+        self.assertEqual(kernel["arch"], "arm")
+        self.assertEqual(kernel["compression"], "gzip")
+        self.assertEqual(kernel["description"], "Linux kernel")
+
+    def test_raw_image_data_blob_not_included_in_metadata(self):
+        # "data" (сирі байти kernel-образу) свідомо НЕ повинні
+        # потрапляти в metadata — інакше звіт роздувся б мегабайтами
+        # бінарних даних.
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, _build_fit())
+        self.assertNotIn("data", obj.metadata["fit"]["images"]["kernel"])
+
+    def test_configuration_and_default_extracted(self):
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, _build_fit())
+        fit = obj.metadata["fit"]
+        self.assertEqual(fit["default_configuration"], "conf-1")
+        self.assertEqual(fit["configurations"]["conf-1"]["kernel"], "kernel")
+        self.assertEqual(fit["configurations"]["conf-1"]["fdt"], "fdt-1")
+
+    def test_unaligned_offsets_all_parse_identically(self):
+        fit = _build_fit()
+        for offset in (0, 1, 2, 3, 4, 55, 133):
+            data = b"\xAB" * offset + fit
+            obj = EmbeddedObject(offset=offset, size=None, kind="DTB", description="Flattened Device Tree")
+            analyze_dtb(obj, data)
+            self.assertTrue(obj.validated, f"failed at offset={offset}")
+            fit_meta = obj.metadata.get("fit")
+            self.assertIsNotNone(fit_meta, f"FIT not detected at offset={offset}")
+            self.assertIn("kernel", fit_meta.get("images", {}), f"wrong result at offset={offset}")
+
+    def test_regular_hardware_dtb_does_not_trigger_fit_detection(self):
+        # Регресія: звичайний апаратний DTB (model/compatible, БЕЗ
+        # images/configurations) не повинен хибно розпізнаватись як FIT.
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, _build_dtb())
+        self.assertTrue(obj.validated)
+        self.assertNotIn("fit", obj.metadata)
+        self.assertEqual(obj.metadata["root_properties"]["model"], "mstar,titania")
+
+    def test_fit_with_only_images_no_configurations(self):
+        b = _DtbBuilder()
+        b.begin_node("")
+        b.prop_str("description", "images only")
+        b.begin_node("images")
+        b.begin_node("kernel")
+        b.prop_str("type", "kernel")
+        b.prop_bytes("data", b"X" * 100)
+        b.end_node()
+        b.end_node()
+        b.end_node()
+
+        obj = EmbeddedObject(offset=0, size=None, kind="DTB", description="Flattened Device Tree")
+        analyze_dtb(obj, b.build_dtb())
+        self.assertTrue(obj.validated)
+        fit = obj.metadata.get("fit")
+        self.assertIsNotNone(fit)
+        self.assertIn("images", fit)
+        self.assertNotIn("configurations", fit)
+
+
 if __name__ == "__main__":
     unittest.main()

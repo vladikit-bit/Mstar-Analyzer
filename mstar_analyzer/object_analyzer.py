@@ -4,6 +4,7 @@ import math
 import re
 import struct
 import zlib
+from dataclasses import dataclass
 
 from .detectors.objects import EmbeddedObject
 
@@ -1273,6 +1274,373 @@ def _read_dtb_root_properties(
     return props
 
 
+# ----------------------------------------------------------------------------
+# FIT (Flattened Image Tree) — modern U-Boot image format
+# ----------------------------------------------------------------------------
+#
+# Перевірено за офіційною документацією U-Boot
+# (docs.u-boot.org/en/v2024.01/usage/fit/source_file_format.html):
+# FIT — це буквально DTB із конкретною угодою про структуру кореневого
+# вузла: підвузли "images" (по одному на kernel/fdt/ramdisk/...) та
+# "configurations" (комбінації образів + default). _read_dtb_root_properties
+# вище зупиняється на ПЕРШОМУ дочірньому вузлі (досить для model/
+# compatible звичайного апаратного DTB) — тут потрібно вибірково
+# заходити ВСЕРЕДИНУ двох конкретних іменованих вузлів, не роблячи
+# повний рекурсивний обхід усього дерева (для звичайного апаратного DTB
+# це можуть бути сотні вузлів апаратної топології, які нас тут не
+# цікавлять).
+
+FIT_MAX_DEPTH = 4  # images/configurations -> image/config вузол -> hash/signature підвузол
+
+
+@dataclass(slots=True)
+class DtbNode:
+
+    name: str
+    properties: dict[str, object]
+    children: dict[str, "DtbNode"]
+
+
+def _dtb_align4(pos: int, struct_start: int) -> int:
+    # Вирівнювання ЗАВЖДИ відносно struct_start (початку структурного
+    # блоку самого .dtb), не абсолютного нуля буфера — та сама причина,
+    # що й у _read_dtb_root_properties вище.
+    return struct_start + (((pos - struct_start) + 3) & ~3)
+
+
+def _decode_dtb_prop_value(value: bytes) -> object:
+    """
+    Генерична декодизація МАЛИХ метаданих-властивостей FIT (description/
+    type/os/arch/compression/kernel/fdt/default тощо — усе це короткі
+    printable-рядки чи 32-бітні числа). Великі бінарні властивості
+    ("data", "value" хешу) свідомо НЕ намагаємось декодувати як текст —
+    лише довжина, щоб не роздувати metadata мегабайтами сирих даних
+    образу.
+    """
+
+    if len(value) == 0:
+        return True  # boolean-маркер (сама наявність властивості)
+
+    if len(value) == 4:
+        if value[-1:] == b"\x00" and all(32 <= b < 127 for b in value[:-1]):
+            return value[:-1].decode("ascii", "replace")
+        return struct.unpack(">I", value)[0]
+
+    if value.endswith(b"\x00") and all(b == 0 or 32 <= b < 127 for b in value):
+        parts = [p.decode("ascii", "replace") for p in value.split(b"\x00") if p]
+        if parts:
+            return parts[0] if len(parts) == 1 else parts
+
+    return f"<{len(value)} bytes>"
+
+
+def _skip_dtb_node(data: bytes, pos: int, struct_start: int, struct_end: int) -> int | None:
+    """
+    pos вказує на FDT_BEGIN_NODE вузла, який нас не цікавить (напр.
+    апаратний піднвузол кореня звичайного DTB). Коректно пропускає
+    ВЕСЬ піддерево (враховуючи вкладені дочірні вузли) й повертає
+    позицію одразу ПІСЛЯ відповідного FDT_END_NODE — без цього
+    подальший розбір сусідніх вузлів зсунувся б.
+    """
+
+    if pos + 4 > struct_end:
+        return None
+
+    (token,) = struct.unpack_from(">I", data, pos)
+
+    if token != DTB_TOKEN_BEGIN_NODE:
+        return None
+
+    pos += 4
+
+    name_end = data.find(b"\x00", pos, struct_end)
+
+    if name_end == -1:
+        return None
+
+    pos = _dtb_align4(name_end + 1, struct_start)
+
+    depth = 1
+
+    while pos + 4 <= struct_end:
+
+        (token,) = struct.unpack_from(">I", data, pos)
+
+        if token == DTB_TOKEN_NOP:
+            pos += 4
+
+        elif token == DTB_TOKEN_PROP:
+
+            pos += 4
+
+            if pos + 8 > struct_end:
+                return None
+
+            length, _nameoff = struct.unpack_from(">II", data, pos)
+            pos += 8
+
+            if length < 0 or pos + length > struct_end:
+                return None
+
+            pos = _dtb_align4(pos + length, struct_start)
+
+        elif token == DTB_TOKEN_BEGIN_NODE:
+
+            depth += 1
+            pos += 4
+
+            name_end = data.find(b"\x00", pos, struct_end)
+
+            if name_end == -1:
+                return None
+
+            pos = _dtb_align4(name_end + 1, struct_start)
+
+        elif token == DTB_TOKEN_END_NODE:
+
+            depth -= 1
+            pos += 4
+
+            if depth == 0:
+                return pos
+
+        else:
+            # DTB_TOKEN_END або нерозпізнаний токен посеред піддерева —
+            # структура обірвалась, не закривши вузол.
+            return None
+
+    return None
+
+
+def _parse_dtb_node(
+    data: bytes,
+    pos: int,
+    struct_start: int,
+    struct_end: int,
+    strings_start: int,
+    strings_end: int,
+    depth: int,
+) -> tuple[DtbNode | None, int]:
+    """
+    Повний (обмежений глибиною depth) розбір вузла, що починається на
+    pos (FDT_BEGIN_NODE), включно з дочірніми вузлами. При вичерпанні
+    depth — просто зупиняється (не намагається "докопатись" пропуском,
+    оскільки FIT-структура за специфікацією й так неглибока: images/
+    configurations -> image/config -> hash/signature — 3 рівні,
+    FIT_MAX_DEPTH=4 лишає запас).
+    """
+
+    if pos + 4 > struct_end:
+        return None, pos
+
+    (token,) = struct.unpack_from(">I", data, pos)
+
+    if token != DTB_TOKEN_BEGIN_NODE:
+        return None, pos
+
+    pos += 4
+
+    name_end = data.find(b"\x00", pos, struct_end)
+
+    if name_end == -1:
+        return None, pos
+
+    name = data[pos:name_end].decode("ascii", "replace")
+    pos = _dtb_align4(name_end + 1, struct_start)
+
+    properties: dict[str, object] = {}
+    children: dict[str, DtbNode] = {}
+
+    while pos + 4 <= struct_end:
+
+        (token,) = struct.unpack_from(">I", data, pos)
+
+        if token == DTB_TOKEN_NOP:
+            pos += 4
+            continue
+
+        if token == DTB_TOKEN_PROP:
+
+            pos += 4
+
+            if pos + 8 > struct_end:
+                break
+
+            length, nameoff = struct.unpack_from(">II", data, pos)
+            pos += 8
+
+            if length < 0 or pos + length > struct_end:
+                break
+
+            value = data[pos:pos + length]
+            pos = _dtb_align4(pos + length, struct_start)
+
+            name_start = strings_start + nameoff
+            name_stop = data.find(b"\x00", name_start, strings_end)
+
+            if 0 <= nameoff and name_stop != -1:
+                properties[data[name_start:name_stop].decode("ascii", "replace")] = (
+                    _decode_dtb_prop_value(value)
+                )
+
+            continue
+
+        if token == DTB_TOKEN_BEGIN_NODE:
+
+            if depth <= 0:
+                break
+
+            child, pos = _parse_dtb_node(
+                data, pos, struct_start, struct_end, strings_start, strings_end, depth - 1
+            )
+
+            if child is None:
+                break
+
+            children[child.name] = child
+            continue
+
+        if token == DTB_TOKEN_END_NODE:
+            return DtbNode(name=name, properties=properties, children=children), pos + 4
+
+        # DTB_TOKEN_END або нерозпізнаний токен — вузол так і не закрився.
+        break
+
+    return DtbNode(name=name, properties=properties, children=children), pos
+
+
+def _detect_fit_structure(
+    data: bytes,
+    struct_start: int,
+    struct_end: int,
+    strings_start: int,
+    strings_end: int,
+) -> dict[str, object] | None:
+    """
+    Проходить дочірні вузли КОРЕНЯ по черзі: "images"/"configurations"
+    розбираються повністю (_parse_dtb_node), решта (звичайні апаратні
+    піднвузли, якщо це насправді не FIT, а якийсь інший .dtb) —
+    коректно пропускаються (_skip_dtb_node) без витрат на повний
+    розбір. Повертає None, якщо жодного з двох очікуваних вузлів немає
+    (тобто це не FIT-образ).
+    """
+
+    if struct_start + 4 > struct_end:
+        return None
+
+    (token,) = struct.unpack_from(">I", data, struct_start)
+
+    if token != DTB_TOKEN_BEGIN_NODE:
+        return None
+
+    pos = struct_start + 4
+    name_end = data.find(b"\x00", pos, struct_end)
+
+    if name_end == -1:
+        return None
+
+    pos = _dtb_align4(name_end + 1, struct_start)
+
+    # Спершу пропускаємо властивості кореня (той самий цикл-скіп, що й
+    # _read_dtb_root_properties, але тут нам не потрібні самі значення —
+    # лише дійти до першого дочірнього вузла).
+    while pos + 4 <= struct_end:
+
+        (token,) = struct.unpack_from(">I", data, pos)
+
+        if token == DTB_TOKEN_NOP:
+            pos += 4
+            continue
+
+        if token != DTB_TOKEN_PROP:
+            break
+
+        pos += 4
+
+        if pos + 8 > struct_end:
+            return None
+
+        length, _nameoff = struct.unpack_from(">II", data, pos)
+        pos += 8
+
+        if length < 0 or pos + length > struct_end:
+            return None
+
+        pos = _dtb_align4(pos + length, struct_start)
+
+    images_node: DtbNode | None = None
+    configurations_node: DtbNode | None = None
+
+    while pos + 4 <= struct_end:
+
+        (token,) = struct.unpack_from(">I", data, pos)
+
+        if token == DTB_TOKEN_NOP:
+            pos += 4
+            continue
+
+        if token != DTB_TOKEN_BEGIN_NODE:
+            break
+
+        peek_pos = pos + 4
+        name_end = data.find(b"\x00", peek_pos, struct_end)
+
+        if name_end == -1:
+            return None
+
+        child_name = data[peek_pos:name_end].decode("ascii", "replace")
+
+        if child_name in ("images", "configurations"):
+
+            child, pos = _parse_dtb_node(
+                data, pos, struct_start, struct_end, strings_start, strings_end, FIT_MAX_DEPTH
+            )
+
+            if child is None:
+                return None
+
+            if child_name == "images":
+                images_node = child
+            else:
+                configurations_node = child
+
+        else:
+            skipped = _skip_dtb_node(data, pos, struct_start, struct_end)
+
+            if skipped is None:
+                return None
+
+            pos = skipped
+
+    if images_node is None and configurations_node is None:
+        return None
+
+    result: dict[str, object] = {}
+
+    if images_node is not None:
+        result["images"] = {
+            name: {
+                k: v for k, v in node.properties.items()
+                if k in ("description", "type", "os", "arch", "compression", "load", "entry", "data-size")
+            }
+            for name, node in images_node.children.items()
+        }
+
+    if configurations_node is not None:
+        result["configurations"] = {
+            name: {
+                k: v for k, v in node.properties.items()
+                if k in ("description", "kernel", "firmware", "fdt", "ramdisk", "loadables", "compatible")
+            }
+            for name, node in configurations_node.children.items()
+        }
+        default_config = configurations_node.properties.get("default")
+        if default_config:
+            result["default_configuration"] = default_config
+
+    return result
+
+
 # ============================================================================
 # U-Boot legacy image (uImage)
 # ============================================================================
@@ -1534,6 +1902,17 @@ def analyze_dtb(obj: EmbeddedObject, data: bytes) -> None:
 
     if root_properties:
         obj.metadata["root_properties"] = root_properties
+
+    fit = _detect_fit_structure(
+        data,
+        struct_start=pos + off_dt_struct,
+        struct_end=pos + off_dt_struct + size_dt_struct,
+        strings_start=pos + off_dt_strings,
+        strings_end=pos + off_dt_strings + size_dt_strings,
+    )
+
+    if fit is not None:
+        obj.metadata["fit"] = fit
 
 
 def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
