@@ -6,6 +6,7 @@ from .renderers import RENDERERS
 from .renderers.summary import render_cross_tree_summary
 from .detectors.features import FEATURE_CONFIDENCE_MARKER
 from .analyzers.squashfs import SquashFsInfo
+from .flash_layout import FlashLayout, build_flash_layout
 
 
 def render_squashfs(summary: SquashFsInfo) -> None:
@@ -46,6 +47,36 @@ def render_tree(root: FirmwareNode) -> None:
     print(root.pretty())
 
 
+def render_flash_layout(layout: FlashLayout) -> None:
+    """
+    Синтезоване, іменовані зведення "flash map" — на відміну від
+    "Firmware map" (build_firmware_map/FirmwareMap.as_table(), сирий
+    точковий скан magic/entropy знахідок), тут — впорядкований,
+    суцільний (без прогалин/перекриттів) список меж [start, end) з
+    людяними лейблами, кожен або спирається на конкретний провалідований
+    доказ (об'єкт/розпакований потік), або чесно позначений
+    ентропійною міткою там, де доказу немає.
+    """
+
+    if not layout.regions:
+        return
+
+    print()
+    print("Flash layout")
+    print("-" * 70)
+
+    for r in layout.regions:
+
+        marker = "✓" if r.confidence == "high" else "?"
+
+        line = f"{marker} 0x{r.start:08X} - 0x{r.end:08X}  ({r.size:>8,} bytes)  {r.label}"
+
+        if r.detail:
+            line += f"  [{r.detail}]"
+
+        print(line)
+
+
 def render_summary(root: FirmwareNode) -> None:
 
     total_nodes = sum(1 for _ in root.walk())
@@ -63,6 +94,8 @@ def render_report(root: FirmwareNode) -> None:
     render_summary(root)
 
     render_tree(root)
+
+    render_flash_layout(build_flash_layout(root))
 
     render_cross_tree_summary(root)
 

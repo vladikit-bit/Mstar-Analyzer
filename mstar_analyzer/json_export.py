@@ -20,6 +20,7 @@ from typing import Any
 from . import __version__ as SCANNER_VERSION
 from .firmware_tree import FirmwareNode
 from .reporting import collect_capabilities, collect_ffmpeg, collect_libpng, collect_openssl, collect_runtime
+from .flash_layout import build_flash_layout
 
 # Версія САМЕ ФОРМАТУ JSON-звіту — окрема вісь від SCANNER_VERSION
 # (версії інструмента). Інструмент може випустити новий реліз, не
@@ -184,6 +185,7 @@ def build_json_report(root: FirmwareNode) -> dict:
     openssl = collect_openssl(root)
     ffmpeg = collect_ffmpeg(root)
     libpng = collect_libpng(root)
+    flash_layout = build_flash_layout(root)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -195,6 +197,7 @@ def build_json_report(root: FirmwareNode) -> dict:
         },
         "tree": _tree_to_dict(root, node_ids),
         "nodes": nodes,
+        "flash_layout": _jsonify(flash_layout),
         "cross_tree_summary": {
             "runtime": _jsonify(runtime) if runtime is not None else None,
             "capabilities": _jsonify(capabilities) if capabilities is not None else None,
