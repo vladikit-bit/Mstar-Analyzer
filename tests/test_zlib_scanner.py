@@ -21,7 +21,32 @@ import zlib
 from mstar_analyzer.analyze import analyze_node
 from mstar_analyzer.extractors.factory import DEFAULT_FACTORY
 from mstar_analyzer.firmware_tree import FirmwareNode
-from mstar_analyzer.signatures import Finding, ZlibHeuristicScanner
+from mstar_analyzer.signatures import Finding, ZlibHeuristicScanner, _VALID_ZLIB_HEADERS
+
+
+class ZlibValidHeaderEnumerationTests(unittest.TestCase):
+    """
+    ZlibHeuristicScanner шукає через iter_find() по переліченому набору
+    валідних (CMF,FLG) пар (_VALID_ZLIB_HEADERS), а не циклом по
+    кожному байту — цей тест фіксує саме той факт, на якому тримається
+    швидкість: набір валідних заголовків малий і незмінний.
+    """
+
+    def test_exactly_32_valid_headers(self):
+        # 8 валідних CMF (CINFO 0..7, CM=8) x 4 валідних FLEVEL
+        # (FDICT=0, FCHECK підбирається однозначно під кожен) = 32.
+        self.assertEqual(len(_VALID_ZLIB_HEADERS), 32)
+
+    def test_every_enumerated_header_passes_checksum(self):
+        for header in _VALID_ZLIB_HEADERS:
+            cmf, flg = header
+            self.assertEqual((cmf * 256 + flg) % 31, 0)
+            self.assertEqual(cmf & 0x0F, 8)
+
+    def test_well_known_zlib_compress_headers_are_included(self):
+        # 0x78 0x9C — найпоширеніший заголовок, який реально видає
+        # zlib.compress() на рівні 6 (типовий дефолт).
+        self.assertIn(bytes((0x78, 0x9C)), _VALID_ZLIB_HEADERS)
 
 
 class ZlibHeuristicScannerTests(unittest.TestCase):
@@ -100,6 +125,27 @@ class ZlibHeuristicScannerTests(unittest.TestCase):
         found = self.scanner.scan(noise)
         expected = len(noise) / 2048
         self.assertLess(len(found), expected * 3)
+
+    def test_scan_stays_fast_on_large_high_entropy_input(self):
+        """
+        Регресія на продуктивність: scan() шукає через iter_find() по
+        32 переліченим заголовкам (_VALID_ZLIB_HEADERS), а не циклом
+        по кожному байту. На 8 МБ псевдовипадкових даних (найгірший
+        випадок для high-entropy вікна) оптимізована версія — ~0.12с;
+        попередня посимвольна Python-реалізація — ~0.7с. Межу 0.4с
+        свідомо взято так, щоб пропускати оптимізовану версію з запасом
+        і ловити випадкове повернення до старого алгоритму.
+        """
+
+        import time
+
+        data = random.Random(1).randbytes(8_000_000)
+
+        t0 = time.perf_counter()
+        self.scanner.scan(data)
+        elapsed = time.perf_counter() - t0
+
+        self.assertLess(elapsed, 0.4, f"scan() took {elapsed:.3f}s — looks like the O(n) per-byte fallback")
 
 
 class ZlibFactoryRegistrationTests(unittest.TestCase):

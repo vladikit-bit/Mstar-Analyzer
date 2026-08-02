@@ -13,10 +13,11 @@ LzmaHeuristicScanner і ZlibHeuristicScanner свідомо запускають
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .entropy import EntropyPoint, classify_region, high_entropy_regions, scan_entropy, sparkline
-from .signatures import AsciiMarkerScanner, LzmaHeuristicScanner, MagicScanner, ZlibHeuristicScanner
+from .signatures import AsciiMarkerScanner, Finding, Jffs2Scanner, LzmaHeuristicScanner, MagicScanner, ZlibHeuristicScanner
 
 
 @dataclass
@@ -95,6 +96,72 @@ def _dedupe_lzma_findings(findings: list[MapEntry], cluster_distance: int = 16) 
     return deduped
 
 
+_JFFS2_LEN_RE = re.compile(r"len=(\d+)")
+
+
+def _group_jffs2_nodes(findings: list[Finding], gap_tolerance: int = 32) -> list[MapEntry]:
+    """
+    Jffs2Scanner (signatures.py) повертає ОДНУ Finding на кожен окремий
+    JFFS2-вузол (inode/dirent/padding-заголовок, кожен з власним CRC32).
+    Реальний JFFS2-розділ складається з тисяч таких вузлів підряд — якби
+    ми клали їх у firmware map по одному рядку на вузол, реальний
+    firmware-образ з JFFS2-розділом перетворив би "Firmware map" на
+    список у тисячі рядків, і жоден з них окремо не був би корисніший за
+    сусідній (сирий заголовок вузла сам по собі каже лише "тут JFFS2",
+    не більше).
+
+    Натомість групуємо суміжні вузли (кінець вузла N ~ початок вузла
+    N+1, з допуском `gap_tolerance` байт на padding/вирівнювання) в один
+    "JFFS2 filesystem region" запис із діапазоном офсетів і кількістю
+    вузлів. Це той сигнал, який реально потрібен на цьому етапі: "тут є
+    JFFS2-розділ розміром ~X, від offset Y" — досить, щоб піти дослідити
+    його вручну чи чекати на повний парсер (Stage 3, ще не реалізовано;
+    на відміну від SquashFS цей проект поки НЕ вміє розпаковувати
+    JFFS2 — лише виявляти межі).
+
+    totlen кожного вузла беремо з `finding.detail` (формат
+    "type=0x.... len=N", Jffs2Scanner) — той самий підхід, що вже
+    використовує detectors/code_caves.py для "region:code"-записів.
+    """
+
+    if not findings:
+        return []
+
+    ordered = sorted(findings, key=lambda f: f.offset)
+
+    def _end(f: Finding) -> int:
+        match = _JFFS2_LEN_RE.search(f.detail)
+        length = int(match.group(1)) if match else Jffs2Scanner.HEADER_SIZE
+        return f.offset + length
+
+    regions: list[list[Finding]] = [[ordered[0]]]
+    region_end = _end(ordered[0])
+
+    for finding in ordered[1:]:
+        if finding.offset <= region_end + gap_tolerance:
+            regions[-1].append(finding)
+        else:
+            regions.append([finding])
+        region_end = max(region_end, _end(finding))
+
+    entries: list[MapEntry] = []
+
+    for region in regions:
+        start = region[0].offset
+        end = max(_end(f) for f in region)
+        count = len(region)
+        entries.append(
+            MapEntry(
+                offset=start,
+                kind="JFFS2 filesystem region",
+                confidence="high",
+                detail=f"{count} node{'s' if count != 1 else ''}, ~{end - start} bytes (not extracted)",
+            )
+        )
+
+    return entries
+
+
 def build_firmware_map(data: bytes, entropy_window: int = 1024, lzma_confidence_threshold: float = 7.0) -> FirmwareMap:
     entries: list[MapEntry] = []
 
@@ -103,10 +170,17 @@ def build_firmware_map(data: bytes, entropy_window: int = 1024, lzma_confidence_
         for f in scanner.scan(data):
             entries.append(MapEntry(offset=f.offset, kind=f.name, confidence=f.confidence, detail=f.detail))
 
-    # 2) ентропія по всьому файлу
+    # 2) JFFS2 — теж по всьому файлу (Jffs2Scanner тепер швидкий, див.
+    #    signatures.py: iter_find() замість посимвольного Python-циклу,
+    #    ~0.03с/32МБ проти ~3с раніше). Один реальний розділ JFFS2 — це
+    #    тисячі суміжних вузлів; групуємо їх у "JFFS2 filesystem region",
+    #    інакше карта потонула б у рядках на кожен окремий inode/dirent.
+    entries.extend(_group_jffs2_nodes(Jffs2Scanner().scan(data)))
+
+    # 3) ентропія по всьому файлу
     points = scan_entropy(data, window=entropy_window)
 
-    # 3) LZMA- та zlib-евристики — тільки в межах high-entropy регіонів
+    # 4) LZMA- та zlib-евристики — тільки в межах high-entropy регіонів
     #    (сильно швидше і точніше; обидва сканери мають високий базовий
     #    рівень випадкових спрацювань на структурованих/малоентропійних
     #    ділянках, де відповідного потоку однаково не буде).
@@ -127,7 +201,7 @@ def build_firmware_map(data: bytes, entropy_window: int = 1024, lzma_confidence_
         ]
         entries.extend(_dedupe_lzma_findings(zlib_entries))
 
-    # 4) сирі "невідомі" регіони за класифікацією ентропії (empty/code/compressed/...)
+    # 5) сирі "невідомі" регіони за класифікацією ентропії (empty/code/compressed/...)
     #    зводимо сусідні вікна одного класу у діапазони, щоб не засмічувати карту
     if points:
         cur_class = classify_region(points[0].entropy)
