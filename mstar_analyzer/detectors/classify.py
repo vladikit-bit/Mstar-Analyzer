@@ -12,6 +12,14 @@ COMPRESSION_BY_NAME: dict[str, tuple[str, str]] = {
     "lzma-alone": ("LZMA", "LZMA"),
     "gzip": ("gzip", "gzip"),
     "xz": ("XZ", "XZ"),
+    # BZip2Extractor.method == "bzip2" (extractors/bzip2.py) — цей запис
+    # був відсутній, тож bzip2-вузли мовчки лишались БЕЗ node.format/
+    # node.compression (None замість "bzip2"), на відміну від gzip/xz/
+    # lzma-alone. Видно одразу в трьох місцях, що читають ці поля:
+    # firmware_tree.pretty() не друкує тег "[bzip2]" у дереві,
+    # json_export.py віддає null замість "bzip2", а flash_layout.py
+    # підміняє лейбл на "blob stream" замість "bzip2 stream".
+    "bzip2": ("bzip2", "bzip2"),
 }
 
 
