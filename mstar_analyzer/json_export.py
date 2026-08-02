@@ -111,6 +111,7 @@ _ANALYSIS_KEYS = (
     "sdk_symbols",
     "codec_table",
     "squashfs",
+    "chip_id",
 )
 
 

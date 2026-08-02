@@ -4,6 +4,7 @@ from .busybox import BusyBoxInfo, analyze_busybox
 from .runtime import RuntimeInfo, analyze_runtime
 from .sdk_symbols import SdkSymbolProfile, analyze_sdk_symbols
 from .codec_table import CodecTable, CodecTableProfile, analyze_codec_table
+from .chip_id import ChipMatch, ChipIdentification, analyze_chip_id
 from .mboot_env import MBootVariable, MBootEnvBlockInfo, parse_mboot_env_block, compute_confidence
 
 __all__ = [
@@ -20,6 +21,9 @@ __all__ = [
     "CodecTable",
     "CodecTableProfile",
     "analyze_codec_table",
+    "ChipMatch",
+    "ChipIdentification",
+    "analyze_chip_id",
     "MBootVariable",
     "MBootEnvBlockInfo",
     "parse_mboot_env_block",
