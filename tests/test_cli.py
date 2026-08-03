@@ -77,5 +77,49 @@ class ReportsDirAutoCreateTests(unittest.TestCase):
         self.assertTrue(output_path.exists())
 
 
+class CompareWithTests(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+        self.firmware = Path(self.tmp.name) / "flash.bin"
+        self.firmware.write_bytes(
+            b"\x00" * 50
+            + b"MDrv_GE_SetBlt\x00Wait MIU0...\x00K5AP_BD_MST297B_D01A\x00"
+            + b"\x00" * 500
+        )
+
+    def test_nonexistent_compare_file_errors_before_running(self):
+        # parser.error() кидає SystemExit(2), а не повертає значення зі
+        # звичайного return — на відміну від решти тестів тут.
+        with self.assertRaises(SystemExit) as ctx:
+            _run_cli([str(self.firmware), "--compare-with", str(Path(self.tmp.name) / "missing.json")])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_compare_with_valid_prior_report_succeeds(self):
+        report_path = Path(self.tmp.name) / "prior.json"
+        rc1 = _run_cli([str(self.firmware), "-j", str(report_path)])
+        self.assertEqual(rc1, 0)
+        self.assertTrue(report_path.exists())
+
+        rc2 = _run_cli([str(self.firmware), "--compare-with", str(report_path)])
+        self.assertEqual(rc2, 0)
+
+    def test_compare_with_report_missing_fingerprint_key_does_not_crash(self):
+        old_report = Path(self.tmp.name) / "old.json"
+        old_report.write_text('{"schema_version": 1}', encoding="utf-8")
+
+        rc = _run_cli([str(self.firmware), "--compare-with", str(old_report)])
+        self.assertEqual(rc, 0)  # деградує без падіння, лише пропускає порівняння
+
+    def test_compare_with_corrupted_json_does_not_crash(self):
+        broken = Path(self.tmp.name) / "broken.json"
+        broken.write_text("not valid json{{{", encoding="utf-8")
+
+        rc = _run_cli([str(self.firmware), "--compare-with", str(broken)])
+        self.assertEqual(rc, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
