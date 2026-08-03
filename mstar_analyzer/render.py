@@ -7,6 +7,7 @@ from .renderers.summary import render_cross_tree_summary
 from .detectors.features import FEATURE_CONFIDENCE_MARKER
 from .analyzers.squashfs import SquashFsInfo
 from .flash_layout import FlashLayout, build_flash_layout
+from .fingerprint import SimilarityResult
 
 
 def render_squashfs(summary: SquashFsInfo) -> None:
@@ -75,6 +76,46 @@ def render_flash_layout(layout: FlashLayout) -> None:
             line += f"  [{r.detail}]"
 
         print(line)
+
+
+def render_similarity(compared_with: str, result: SimilarityResult) -> None:
+    """
+    --compare-with: показує наскільки СИМВОЛИ SDK / capabilities / чип /
+    libc цієї прошивки збігаються з раніше збереженим fingerprint іншої
+    (з JSON, згенерованого попереднім прогоном --json на іншому файлі).
+    Індекс Жаккара на кожному сигналі окремо + один зважений
+    "overall" — навмисно з приміткою, що вага суб'єктивна, а не
+    стандартна формула.
+    """
+
+    print()
+    print("Similarity comparison")
+    print("-" * 70)
+    print(f"Compared with : {compared_with}")
+    print()
+    print(f"Overall similarity : {result.overall_score:.0%}  (weighted heuristic — see below, not a precise measurement)")
+
+    if result.sdk_symbol_similarity:
+        print()
+        print("SDK symbols:")
+        for category, sim in sorted(result.sdk_symbol_similarity.items(), key=lambda kv: -kv[1].jaccard):
+            print(f"    {category:<12} {sim.jaccard:>5.0%}  ({sim.shared} shared / {sim.total} total)")
+
+    print()
+    print(
+        f"Capabilities  : {result.capabilities_similarity:.0%}  "
+        f"({result.capabilities_shared} shared / {result.capabilities_total} total)"
+    )
+
+    chip_line = "match" if result.chip_match else "no match / unknown"
+    if result.shared_chip_models:
+        chip_line += " (" + ", ".join(sorted(result.shared_chip_models)) + ")"
+    print(f"Chip model    : {chip_line}")
+
+    print(f"LibC          : {'match' if result.libc_match else 'no match / unknown'}")
+
+    if result.shared_ecos_versions:
+        print(f"eCos packages : {len(result.shared_ecos_versions)} shared version(s) — " + ", ".join(sorted(result.shared_ecos_versions)))
 
 
 def render_summary(root: FirmwareNode) -> None:
