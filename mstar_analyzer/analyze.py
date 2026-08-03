@@ -14,7 +14,7 @@ from .json_export import build_json_report
 from .signatures import Finding
 from .detectors.features import detect_features
 from .detectors.objects import detect_objects
-from .object_analyzer import analyze_objects
+from .object_analyzer import analyze_objects, UIMAGE_HEADER_SIZE
 from .detectors.classify import classify_node
 from .detectors.libraries import analyze_libraries
 from .detectors.code_caves import detect_code_caves
@@ -53,7 +53,27 @@ def _annotate_findings_with_extraction_outcome(findings, results) -> None:
             finding.extraction = f"failed — {result.error}"
 
 
-def collect_extract_candidates(fw_map):
+def collect_extract_candidates(fw_map, exclude_ranges=()):
+    """
+    exclude_ranges — офсети всередині ВЖЕ ідентифікованих контейнерів
+    (наразі: payload валідних uImage-об'єктів), для яких розпакування
+    свідомо віддається окремому, контекстно-обізнаному коду нижче
+    (analyze_node()), а не звичайному "знайшли magic — розпакували".
+
+    Без цього виключення payload uImage (особливо нестиснений,
+    ih_comp=0 — тоді байти лежать "як є", без жодної обгортки) міг би
+    одночасно дати:
+      (a) анонімний дочірній вузол тут, на рівні батька — той самий
+          gzip/xz/... magic, що є ВСЕРЕДИНІ payload, знайшов би
+          звичайний повнофайловий скан build_firmware_map();
+      (b) правильно вкладений дочірній вузол під "uImage payload
+          (...)" — той самий вміст, але вже З контекстом (OS/arch/
+          compression з заголовка uImage).
+    Той самий байтовий вміст показувався б у дереві двічі. Виключення
+    офсетів, що належать uImage payload, з кандидатів ЦЬОГО рівня
+    залишає рівно один шлях: через (b).
+    """
+
     findings = []
 
     for entry in fw_map.entries:
@@ -66,6 +86,9 @@ def collect_extract_candidates(fw_map):
             "SquashFS (LE)",
             "SquashFS (BE)",
         ):
+            if any(start <= entry.offset < end for start, end in exclude_ranges):
+                continue
+
             findings.append(
                 Finding(
                     offset=entry.offset,
@@ -77,11 +100,21 @@ def collect_extract_candidates(fw_map):
 
     return findings
 
-def analyze_node(node: FirmwareNode, depth: int = 0) -> None:
+def analyze_node(node: FirmwareNode, depth: int = 0, min_size: int = MIN_SIZE) -> None:
+    """
+    min_size — за замовчуванням MIN_SIZE (поріг, що відсіює аналіз
+    занадто дрібних, імовірно шумових фрагментів). uImage payload —
+    єдиний виняток: його розмір підтверджений CRC самого заголовка
+    (не здогадка candidate-сканера), тож викликається з min_size=0
+    нижче — інакше короткий (<512 байт) стиснений payload узагалі не
+    розпаковувався б рекурсивно, хоча раніше (до появи цього вузла)
+    той самий вміст міг випадково розпакуватись через звичайний
+    повнофайловий скан батьківського рівня.
+    """
     if depth >= MAX_DEPTH:
         return
 
-    if len(node.data) < MIN_SIZE:
+    if len(node.data) < min_size:
         return
 
     fw = build_firmware_map(node.data)
@@ -89,7 +122,24 @@ def analyze_node(node: FirmwareNode, depth: int = 0) -> None:
 
     node.code_caves = detect_code_caves(node.data, firmware_map=fw)
 
-    findings = collect_extract_candidates(fw)
+    # Об'єкти детектуємо ДО збору extract-кандидатів (не після, як було
+    # раніше) — саме тому, що collect_extract_candidates() потребує
+    # знати межі payload уже знайдених uImage-контейнерів, щоб
+    # виключити їх зі свого списку (див. docstring вище).
+    node.objects = detect_objects(node.data)
+
+    analyze_objects(
+        node.objects,
+        node.data,
+    )
+
+    uimage_payload_ranges = [
+        (obj.offset + UIMAGE_HEADER_SIZE, obj.offset + obj.size)
+        for obj in node.objects
+        if obj.kind == "uImage" and obj.validated and obj.size
+    ]
+
+    findings = collect_extract_candidates(fw, exclude_ranges=uimage_payload_ranges)
     
     node.findings.extend(findings)
 
@@ -100,13 +150,6 @@ def analyze_node(node: FirmwareNode, depth: int = 0) -> None:
     node.strings = extract_ascii_strings(node.data)
 
     node.features = detect_features(node.strings)
-
-    node.objects = detect_objects(node.data)
-
-    analyze_objects(
-        node.objects,
-        node.data,
-    )
 
     node.analysis = analyze_libraries(node.strings)
 
@@ -186,6 +229,59 @@ def analyze_node(node: FirmwareNode, depth: int = 0) -> None:
             node.add_child(child)
 
             analyze_node(child, depth + 1)
+
+    # --- uImage payload -> proper tree child ----------------------
+    #
+    # object_analyzer.analyze_uimage() (invoked above via
+    # analyze_objects()) fully decodes the uImage header — OS/arch/
+    # type/compression, both CRCs, validated size — but
+    # detectors/objects.py is intentionally detection-only ("this
+    # module DOES NOT extract anything"), so the payload itself never
+    # became part of the tree.
+    #
+    # collect_extract_candidates() above already excluded these exact
+    # ranges from this node's OWN candidate scan (uimage_payload_ranges),
+    # so nothing upstream should have created a competing child at this
+    # offset already — every uImage payload, compressed or not, gets
+    # exactly one child, created here, with proper uImage context
+    # (compression/OS/arch from the header) instead of showing up as an
+    # anonymous "gzip stream" with no link back to its container.
+    #
+    # `covered_offsets` stays as a defensive check (cheap, and guards
+    # against anything else that might already occupy this exact
+    # offset — e.g. two overlapping uImage headers) rather than the
+    # primary duplication guard it used to be.
+    covered_offsets = {c.offset for c in node.children}
+
+    for obj in node.objects:
+
+        if obj.kind != "uImage" or not obj.validated or not obj.size:
+            continue
+
+        payload_offset = obj.offset + UIMAGE_HEADER_SIZE
+
+        if payload_offset in covered_offsets:
+            continue
+
+        payload = node.data[payload_offset:obj.offset + obj.size]
+
+        if not payload:
+            continue
+
+        compression = obj.metadata.get("compression", "unknown")
+
+        child = FirmwareNode(
+            name=f"uImage payload ({compression})",
+            offset=payload_offset,
+            data=payload,
+        )
+
+        classify_node(child)
+
+        node.add_child(child)
+        covered_offsets.add(payload_offset)
+
+        analyze_node(child, depth + 1, min_size=0)
 
 
 def main():
