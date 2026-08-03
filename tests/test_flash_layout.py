@@ -17,6 +17,7 @@ from __future__ import annotations
 import unittest
 
 from mstar_analyzer.detectors.objects import EmbeddedObject
+from mstar_analyzer.firmware_map import FirmwareMap, MapEntry
 from mstar_analyzer.firmware_tree import FirmwareNode
 from mstar_analyzer.flash_layout import build_flash_layout
 
@@ -235,6 +236,50 @@ class RealPipelineIntegrationTests(unittest.TestCase):
         stream_region = next(r for r in layout.regions if r.source == "extracted stream")
         self.assertEqual(stream_region.size, child.metadata["raw_consumed_bytes"])
         self.assertLess(stream_region.size, len(payload))  # НЕ розмір розпакованих даних
+
+
+class Jffs2AnchorTests(unittest.TestCase):
+    """
+    "JFFS2 filesystem region" живе в root.firmware_map.entries — окремо
+    від root.objects/root.children, які раніше були ЄДИНИМИ джерелами
+    якорів тут. Без _jffs2_anchors() такий регіон мовчки провалювався б
+    в "unclassified", попри те, що в сирій "Firmware map" таблиці він
+    уже показаний коректно (firmware_map.py::_group_jffs2_nodes()).
+    """
+
+    def _root_with_jffs2_entry(self, offset: int, detail: str, total_size: int = 400) -> FirmwareNode:
+        root = FirmwareNode(name="flash.bin", offset=0, data=b"\xFF" * total_size)
+        root.firmware_map = FirmwareMap(
+            size=total_size,
+            entropy_points=[],
+            entries=[MapEntry(offset=offset, kind="JFFS2 filesystem region", confidence="high", detail=detail)],
+        )
+        return root
+
+    def test_jffs2_region_becomes_a_flash_layout_anchor(self):
+        root = self._root_with_jffs2_entry(offset=100, detail="30 nodes, ~150 bytes (not extracted)")
+        layout = build_flash_layout(root)
+        _assert_contiguous_coverage(self, layout)
+
+        jffs2_regions = [r for r in layout.regions if "JFFS2" in r.label]
+        self.assertEqual(len(jffs2_regions), 1, layout.regions)
+        self.assertEqual(jffs2_regions[0].start, 100)
+        self.assertEqual(jffs2_regions[0].end, 250)  # 100 + 150
+        self.assertEqual(jffs2_regions[0].source, "object")
+
+    def test_no_firmware_map_means_no_jffs2_anchors(self):
+        # root.firmware_map лишається None (default) — не повинно падати.
+        root = FirmwareNode(name="flash.bin", offset=0, data=b"\xFF" * 200)
+        layout = build_flash_layout(root)
+        _assert_contiguous_coverage(self, layout)
+        self.assertEqual(len(layout.regions), 1)
+        self.assertEqual(layout.regions[0].source, "entropy")
+
+    def test_entry_with_unparseable_detail_is_skipped_not_crashed(self):
+        root = self._root_with_jffs2_entry(offset=100, detail="something without a byte count")
+        layout = build_flash_layout(root)  # не повинно кинути виняток
+        _assert_contiguous_coverage(self, layout)
+        self.assertFalse([r for r in layout.regions if "JFFS2" in r.label])
 
 
 if __name__ == "__main__":

@@ -29,10 +29,16 @@ partition table" немає жодного публічно задокумент
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from .entropy import classify_region, shannon_entropy
 from .firmware_tree import FirmwareNode
+
+# "N nodes, ~SIZE bytes (not extracted)" — детально _group_jffs2_nodes()
+# (firmware_map.py). Той самий підхід парсингу розміру з detail-рядка,
+# що вже використовує detectors/code_caves.py для "region:*"-записів.
+_JFFS2_SIZE_RE = re.compile(r"~(\d+) bytes")
 
 
 @dataclass(slots=True)
@@ -136,11 +142,60 @@ def _child_stream_anchors(root: FirmwareNode) -> list[FlashRegion]:
     return anchors
 
 
+def _jffs2_anchors(root: FirmwareNode) -> list[FlashRegion]:
+    """
+    "JFFS2 filesystem region" (firmware_map.py::_group_jffs2_nodes())
+    живе в root.firmware_map.entries, а не в root.objects/root.children
+    — жодна з двох функцій вище його не бачить, тож без цього JFFS2-
+    розділ мовчки провалювався б в "unclassified" тут, попри те, що в
+    сирій "Firmware map" таблиці (analyze.py::_run()) він уже показаний
+    коректно.
+
+    Це ЄДИНИЙ запис із fw.entries, доданий цим шляхом. UBI/UBI erase
+    counter/cramfs (signatures.py, теж лише magic-детекція) свідомо НЕ
+    додаються так само — для них немає жодного парсера заголовка, що
+    дав би реальний розмір (Finding там — це лише точка, без size), а
+    вигадувати межі означало б порушити принцип цього модуля
+    (evidence-based, не здогадки — див. docstring файлу). JFFS2 —
+    виняток саме тому, що Jffs2Scanner валідує CRC32 кожного вузла і
+    _group_jffs2_nodes() зводить це в реальний, підтверджений діапазон.
+    """
+
+    if root.firmware_map is None:
+        return []
+
+    anchors: list[FlashRegion] = []
+
+    for entry in root.firmware_map.entries:
+
+        if entry.kind != "JFFS2 filesystem region":
+            continue
+
+        match = _JFFS2_SIZE_RE.search(entry.detail)
+
+        if not match:
+            continue
+
+        size = int(match.group(1))
+
+        anchors.append(
+            FlashRegion(
+                start=entry.offset,
+                end=entry.offset + size,
+                label=f"JFFS2 filesystem region ({entry.detail})",
+                source="object",
+                confidence="high",
+            )
+        )
+
+    return anchors
+
+
 def build_flash_layout(root: FirmwareNode) -> FlashLayout:
 
     total_size = len(root.data)
 
-    anchors = _object_anchors(root) + _child_stream_anchors(root)
+    anchors = _object_anchors(root) + _child_stream_anchors(root) + _jffs2_anchors(root)
     anchors.sort(key=lambda r: r.start)
 
     regions: list[FlashRegion] = []
