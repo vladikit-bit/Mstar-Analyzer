@@ -23,6 +23,25 @@ from .fingerprint import build_fingerprint, compare_fingerprints, fingerprint_fr
 MAX_DEPTH = 8
 MIN_SIZE = 512
 
+# kind-и MapEntry (firmware_map.py), для яких зареєстрований Extractor
+# (extractors/factory.py) — тобто ті, що collect_extract_candidates()
+# перетворює на Finding-кандидатів для Stage 5. Винесено в іменовану
+# константу (раніше — літеральний tuple лише всередині
+# collect_extract_candidates()), бо тепер той самий список потрібен і
+# _run() — щоб виключити ці kind-и із сирої таблиці "Firmware map"
+# (вони НЕПІДТВЕРДЖЕНІ на момент друку тієї таблиці; підтверджений
+# статус з'являється пізніше, в секції "Findings", див.
+# FirmwareMap.as_table()'s docstring для exclude_kinds).
+EXTRACTION_CANDIDATE_KINDS = frozenset({
+    "lzma-alone-header",
+    "gzip",
+    "xz",
+    "bzip2",
+    "zlib",
+    "SquashFS (LE)",
+    "SquashFS (BE)",
+})
+
 def _annotate_findings_with_extraction_outcome(findings, results) -> None:
     """
     extract_all() вже РЕАЛЬНО намагається розпакувати кожен candidate —
@@ -77,15 +96,7 @@ def collect_extract_candidates(fw_map, exclude_ranges=()):
     findings = []
 
     for entry in fw_map.entries:
-        if entry.kind in (
-            "lzma-alone-header",
-            "gzip",
-            "xz",
-            "bzip2",
-            "zlib",
-            "SquashFS (LE)",
-            "SquashFS (BE)",
-        ):
+        if entry.kind in EXTRACTION_CANDIDATE_KINDS:
             if any(start <= entry.offset < end for start, end in exclude_ranges):
                 continue
 
@@ -392,7 +403,13 @@ def _run(firmware: Path, json_path: str | None = None, compare_with: str | None 
     print()
     print("Firmware map")
     print("-" * 70)
-    print(fw.as_table())
+    print(fw.as_table(exclude_kinds=EXTRACTION_CANDIDATE_KINDS))
+    print()
+    print(
+        "(потенційні потоки стиснення — lzma/gzip/xz/bzip2/zlib/lz4/SquashFS — "
+        "тут навмисно не показані: на цьому кроці вони ще НЕПІДТВЕРДЖЕНІ. "
+        "Підтверджений результат — нижче, у секції \"Findings\" для кожного вузла.)"
+    )
 
     print()
     print("[2/3] Extracting compressed streams...")

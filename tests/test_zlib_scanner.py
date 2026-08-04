@@ -116,25 +116,84 @@ class ZlibHeuristicScannerTests(unittest.TestCase):
         header_then_zeros = bytes([cmf, flg]) + b"\x00" * 20
         self.assertEqual(self.scanner.scan(header_then_zeros), [])
 
-    def test_false_positive_rate_on_random_data_is_bounded(self):
-        # Детермінований PRNG (не os.urandom) — тест відтворюваний.
-        # Теоретична очікувана частота: ~32 валідних (CMF,FLG) пари з
-        # 65536 можливих на кожну позицію, тобто ~1 знахідка на ~2048
-        # байт. Перевіряємо порядок величини, а не точне число.
-        noise = random.Random(42).randbytes(200_000)
-        found = self.scanner.scan(noise)
-        expected = len(noise) / 2048
-        self.assertLess(len(found), expected * 3)
+    def test_false_positive_rate_on_random_data_is_near_zero(self):
+        """
+        До додавання _deflate_structurally_plausible()/_bounded_deflate_probe()
+        цей тест допускав до 3x теоретичної частоти ~1/2048 (тобто до
+        ~293 знахідок на 200000 байт) — інструмент, який давав ТИСЯЧІ
+        "zlib"-рядків шуму на реальній прошивці (незалежний review,
+        4МБ образ: 1920 кандидатів, 0 успішних декомпресій).
+
+        Після двох структурних перевірок (BTYPE/LEN~NLEN — безкоштовно;
+        обмежений 256-байтний probe через справжній декодер, результат
+        відкидається) емпірично на 40 МБ чистого шуму (19737 структурно
+        валідних CMF/FLG заголовків, БЕЗ ентропійного префільтра) — 0
+        хибних спрацювань. Перевірено на 20 різних seed по 200000 байт
+        кожен — теж стабільний нуль. Це не гарантія на всі можливі
+        входи (математично ненульова залишкова ймовірність існує), але
+        точно НЕ "3x від теоретичної частоти" — тому строгий поріг
+        замість м'якого.
+        """
+        for seed in range(10):
+            with self.subTest(seed=seed):
+                noise = random.Random(seed).randbytes(200_000)
+                found = self.scanner.scan(noise)
+                self.assertEqual(found, [], f"seed={seed}: expected 0 findings on pure noise, got {len(found)}")
+
+    def test_bounded_probe_accepts_valid_empty_zlib_stream(self):
+        """
+        zlib.compress(b"") — валідний 8-байтний потік, що декомпресується
+        в 0 байт БЕЗ помилки. Критерій _bounded_deflate_probe() — "не
+        кинуло виняток", а НЕ "дало непорожній вивід" — саме тому, що
+        вимога "≥1 байт" хибно відкидала б цей легітимний, хай і
+        рідкісний, випадок (знайдено емпірично під час перевірки
+        компромісного рішення з reviewer'ом).
+        """
+        empty_stream = zlib.compress(b"")
+        found = self.scanner.scan(b"\xFF" * 50 + empty_stream + b"\xFF" * 50)
+        self.assertTrue(any(f.offset == 50 for f in found), found)
+
+    def test_deflate_structural_check_rejects_btype_11(self):
+        # BTYPE=11 (reserved/invalid) одразу за валідним CMF/FLG заголовком.
+        from mstar_analyzer.signatures import _deflate_structurally_plausible
+
+        # first byte deflate-потоку: BFINAL=1, BTYPE=11 -> біти (LSB->MSB) 1,1,1 -> 0b111 = 0x07
+        data = bytes([0x78, 0x9C, 0x07]) + b"\x11" * 10
+        self.assertFalse(_deflate_structurally_plausible(data, 0))
+
+    def test_deflate_structural_check_validates_stored_block_len_nlen(self):
+        from mstar_analyzer.signatures import _deflate_structurally_plausible
+
+        # BTYPE=00 (stored), BFINAL=0 -> перший байт deflate-потоку = 0x00
+        # LEN=0x1234, NLEN має бути ~LEN = 0xEDCB
+        valid = bytes([0x78, 0x9C, 0x00, 0x34, 0x12, 0xCB, 0xED])
+        self.assertTrue(_deflate_structurally_plausible(valid, 0))
+
+        invalid = bytes([0x78, 0x9C, 0x00, 0x34, 0x12, 0x00, 0x00])  # NLEN не є доповненням LEN
+        self.assertFalse(_deflate_structurally_plausible(invalid, 0))
+
+    def test_bounded_probe_rejects_garbage_that_passes_free_checks(self):
+        from mstar_analyzer.signatures import _bounded_deflate_probe
+
+        # BTYPE=01 (fixed Huffman) з випадковим сміттям далі — минає
+        # безкоштовну перевірку (яка не заглядає всередину Huffman-кодів),
+        # але має бути відкинуте самим probe.
+        rng = random.Random(11)
+        rejected = 0
+        for _ in range(50):
+            garbage = bytes([0x78, 0x9C]) + rng.randbytes(64)
+            if not _bounded_deflate_probe(garbage, 0):
+                rejected += 1
+        self.assertGreater(rejected, 40, "bounded probe should reject the vast majority of random garbage")
 
     def test_scan_stays_fast_on_large_high_entropy_input(self):
         """
-        Регресія на продуктивність: scan() шукає через iter_find() по
-        32 переліченим заголовкам (_VALID_ZLIB_HEADERS), а не циклом
-        по кожному байту. На 8 МБ псевдовипадкових даних (найгірший
-        випадок для high-entropy вікна) оптимізована версія — ~0.12с;
-        попередня посимвольна Python-реалізація — ~0.7с. Межу 0.4с
-        свідомо взято так, щоб пропускати оптимізовану версію з запасом
-        і ловити випадкове повернення до старого алгоритму.
+        Регресія на продуктивність: навіть з двома додатковими
+        структурними перевірками (BTYPE/LEN~NLEN + обмежений probe)
+        сканування 32 МБ чистого шуму лишається ~0.5с — бо probe
+        (найдорожчий крок) викликається лише для кандидатів, що вже
+        пройшли обидва дешевші фільтри, а на чистому шумі таких
+        практично 0 після BTYPE/LEN~NLEN.
         """
 
         import time
@@ -145,7 +204,7 @@ class ZlibHeuristicScannerTests(unittest.TestCase):
         self.scanner.scan(data)
         elapsed = time.perf_counter() - t0
 
-        self.assertLess(elapsed, 0.4, f"scan() took {elapsed:.3f}s — looks like the O(n) per-byte fallback")
+        self.assertLess(elapsed, 1.0, f"scan() took {elapsed:.3f}s — looks like a performance regression")
 
 
 class ZlibFactoryRegistrationTests(unittest.TestCase):

@@ -13,7 +13,7 @@ from __future__ import annotations
 import struct
 import unittest
 
-from mstar_analyzer.firmware_map import MapEntry, _dedupe_lzma_findings
+from mstar_analyzer.firmware_map import FirmwareMap, MapEntry, _dedupe_lzma_findings
 from mstar_analyzer.signatures import LzmaHeuristicScanner, ZlibHeuristicScanner
 
 
@@ -95,6 +95,42 @@ class DedupeLzmaFindingsTests(unittest.TestCase):
         # скан, реальний потік один — і його заголовок починається з 0.
         self.assertEqual(deduped[0].offset, 0)
         self.assertEqual(deduped[0].kind, "zlib")
+
+
+class AsTableExcludeKindsTests(unittest.TestCase):
+    """
+    as_table(exclude_kinds=...) — analyze.py::_run() використовує це,
+    щоб не друкувати непідтверджені Stage 2 extraction-кандидати
+    (zlib/gzip/xz/...) у ранній "Firmware map" таблиці: той самий
+    candidate пізніше з'являється в секції "Findings" ВЖЕ з реальним
+    extraction-статусом (confirmed/rejected), там ця інформація
+    точніша. За замовчуванням (без аргументу) поведінка не змінюється.
+    """
+
+    def _sample_map(self) -> FirmwareMap:
+        return FirmwareMap(
+            size=1000,
+            entropy_points=[],
+            entries=[
+                MapEntry(offset=10, kind="zlib", confidence="medium", detail="cinfo=7"),
+                MapEntry(offset=20, kind="marker: MStar", confidence="high", detail=""),
+                MapEntry(offset=30, kind="gzip", confidence="high", detail=""),
+            ],
+        )
+
+    def test_default_call_is_unchanged(self):
+        fw = self._sample_map()
+        table = fw.as_table()
+        self.assertIn("zlib", table)
+        self.assertIn("gzip", table)
+        self.assertIn("marker: MStar", table)
+
+    def test_excluded_kinds_are_omitted(self):
+        fw = self._sample_map()
+        table = fw.as_table(exclude_kinds=frozenset({"zlib", "gzip"}))
+        self.assertNotIn("zlib", table)
+        self.assertNotIn("gzip", table)
+        self.assertIn("marker: MStar", table)
 
 
 if __name__ == "__main__":

@@ -37,9 +37,31 @@ class FirmwareMap:
     def sparkline(self, width: int = 64) -> str:
         return sparkline(self.entropy_points, width=width)
 
-    def as_table(self) -> str:
+    def as_table(self, exclude_kinds: frozenset[str] = frozenset()) -> str:
+        """
+        exclude_kinds — kind-и, які свідомо НЕ друкуються тут (за
+        замовчуванням — жодних, повна зворотна сумісність).
+
+        Призначення: kind-и на кшталт "zlib"/"gzip"/... — це сирі,
+        НЕПІДТВЕРДЖЕНІ Stage 2 кандидати. Ця таблиця друкується в
+        analyze.py::_run() ДО Stage 5 (build_firmware_map() — крок
+        [1/3], аналіз/екстракція — крок [2/3]), тобто за конструкцією
+        не може знати, який candidate підтвердився, а який — ні. Той
+        самий candidate пізніше з'являється в секції "Findings"
+        (render_node_findings(), render.py) ВЖЕ зі статусом
+        confirmed/rejected/unresolved і зі згортанням непідтверджених
+        у підсумковий рядок замість переліку кожного окремо — там ця
+        інформація значно точніша й корисніша. Друкувати candidate-и і
+        тут, і там — не просто зайве, а вводить в оману: сира таблиця
+        виглядає так само авторитетно, як підтверджений результат,
+        хоча (для zlib, зокрема) переважна більшість "кандидатів" —
+        типово статистичний шум 2-байтного заголовка (детально —
+        ZlibHeuristicScanner, signatures.py).
+        """
         lines = [f"{'Offset':>10}   {'Type':<30} {'Confidence':<8} Detail"]
         for e in sorted(self.entries, key=lambda x: x.offset):
+            if e.kind in exclude_kinds:
+                continue
             lines.append(f"0x{e.offset:08X}   {e.kind:<30} {e.confidence:<8} {e.detail}")
         return "\n".join(lines)
 
