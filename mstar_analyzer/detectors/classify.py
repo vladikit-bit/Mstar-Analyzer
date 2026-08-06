@@ -23,6 +23,8 @@ COMPRESSION_BY_NAME: dict[str, tuple[str, str]] = {
     # ZlibExtractor.method == "zlib" (extractors/zlib.py) — щойно
     # підключений до Stage 2/5 (ZlibHeuristicScanner + factory.py).
     "zlib": ("zlib", "zlib"),
+    # LZ4Extractor.method == "lz4" (extractors/lz4.py, Frame format).
+    "lz4": ("LZ4", "LZ4"),
 }
 
 

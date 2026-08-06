@@ -38,6 +38,7 @@ EXTRACTION_CANDIDATE_KINDS = frozenset({
     "xz",
     "bzip2",
     "zlib",
+    "lz4",
     "SquashFS (LE)",
     "SquashFS (BE)",
 })

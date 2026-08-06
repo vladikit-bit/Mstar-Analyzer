@@ -68,6 +68,7 @@ MAGIC_SIGNATURES: tuple[tuple[bytes, str], ...] = (
     (b"\x1f\x8b\x08", "gzip"),
     (b"\xfd7zXZ\x00", "xz"),
     (b"BZh", "bzip2"),
+    (b"\x04\x22\x4d\x18", "lz4"),
 
     (b"\x27\x05\x19\x56", "uImage (U-Boot, BE)"),
     (b"\x56\x19\x05\x27", "uImage (U-Boot, LE)"),

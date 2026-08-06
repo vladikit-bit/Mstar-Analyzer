@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from ..extractors.base import FileSystemEntry
+from ..lz4_block import decompress_block as _lz4_decompress_block, Lz4BlockError
 
 @dataclass(slots=True)
 class SquashFsInfo:
@@ -42,6 +43,19 @@ def _decompress_block(data: bytes, compression: str) -> bytes:
             return zlib.decompress(data, -15)
     elif compression in ("xz", "lzma"):
         return lzma.decompress(data)
+    elif compression == "lz4":
+        # SquashFS зберігає розмір кожного блока у власних inode-
+        # метаданих (без жодної LZ4 Frame-обгортки — magic/checksums/
+        # per-block size prefixes тут не потрібні й не присутні), тож
+        # це сирий LZ4 "block format", той самий декодер, що й
+        # extractors/lz4.py використовує для КОЖНОГО блока LZ4 Frame.
+        # Кожен блок SquashFS розпаковується незалежно (той самий
+        # принцип, що вже застосований тут для gzip/xz вище) — без
+        # спільного output-буфера.
+        try:
+            return _lz4_decompress_block(data)
+        except Lz4BlockError as exc:
+            raise SquashFsError(f"corrupt LZ4 block: {exc}") from exc
     elif compression == "none":
         return data
     else:

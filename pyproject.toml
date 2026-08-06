@@ -24,10 +24,21 @@ classifiers = [
 # Readme.md принцип "Modularity before complexity": увесь Stage 2/5
 # (детекція + розпакування) навмисно побудований лише на stdlib
 # (re, struct, lzma, zlib, bz2, dataclasses), без binwalk/7z у PATH.
+# LZ4 (mstar_analyzer/lz4_block.py, extractors/lz4.py) іде ще далі —
+# stdlib не має ЖОДНОГО модуля для LZ4, тож декодер написаний з нуля;
+# пакет lz4 з PyPI використовується виключно в тестах (dev-залежність
+# нижче), як референсний компресор для round-trip перевірки.
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# lz4 тут — ЛИШЕ для генерації тестових fixture-даних
+# (tests/test_lz4_block.py, tests/test_lz4_extractor.py): проєкт сам
+# розпаковує LZ4 чистим Python (mstar_analyzer/lz4_block.py,
+# extractors/lz4.py), без жодної залежності під час роботи — потрібен
+# лише РЕФЕРЕНСНИЙ компресор, щоб перевірити коректність round-trip
+# проти незалежної реалізації. Тести, що його потребують, коректно
+# пропускаються (skip), якщо пакет не встановлено.
+dev = ["pytest", "lz4"]
 
 [project.scripts]
 mstar-analyzer = "mstar_analyzer.analyze:main"

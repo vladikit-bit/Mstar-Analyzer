@@ -6,6 +6,7 @@ from .gzip import GZipExtractor
 from .xz import XZExtractor
 from .zlib import ZlibExtractor
 from .bzip2 import BZip2Extractor
+from .lz4 import LZ4Extractor
 from .squashfs import SquashFsExtractor
 from ..signatures import Finding
 
@@ -28,6 +29,10 @@ _EXTRACTOR_BY_NAME: dict[str, type[Extractor]] = {
     # signatures.py), тож жоден candidate для сирого zlib-потоку
     # ніколи не будувався.
     "zlib": ZlibExtractor,
+    # LZ4Extractor (Frame format, magic 04 22 4D 18) — чистий Python,
+    # без runtime-залежностей (stdlib не має lz4). Перше стиснення в
+    # проєкті поза gzip/xz/bzip2/lzma-alone/zlib родиною stdlib.
+    "lz4": LZ4Extractor,
     "SquashFS (LE)": SquashFsExtractor,
     "SquashFS (BE)": SquashFsExtractor,
 }
