@@ -452,6 +452,8 @@ def analyze_jpeg(
     else:
         obj.metadata["note"] = "EOI not found in available data (truncated?)"
 
+    plausible_dimensions = False
+
     if width is not None and height is not None:
 
         # SOF з розміром 0 у будь-якому вимірі, або з абсурдно великим
@@ -459,15 +461,31 @@ def analyze_jpeg(
         # не десятки тисяч) означає, що це не справжній SOF-сегмент, а
         # байти 0xFFD8FF випадково зустрілись у вже стиснутих/непроявлених
         # даних і "SOF" ми знайшли на випадковому зсуві всередині шуму.
-        plausible = 0 < width <= 8192 and 0 < height <= 8192
+        plausible_dimensions = 0 < width <= 8192 and 0 < height <= 8192
 
         obj.metadata["width"] = width
         obj.metadata["height"] = height
 
-        if not plausible:
+        if not plausible_dimensions:
             obj.validated = False
             obj.confidence = "low"
             obj.metadata["reason"] = "implausible_dimensions"
+
+    # Ні EOI, ні бодай правдоподібного SOF (розмірів) не знайдено — маємо
+    # лише 2-байтний SOI magic (FF D8) без ЖОДНОГО подальшого структурного
+    # підтвердження. На відміну від PNG (8-байтний magic + IHDR-перевірка
+    # відразу) чи DTB/ELF (magic + одразу кілька перехресних перевірок
+    # полів), тут увесь "доказ" — 2 байти, чого категорично замало для
+    # high-confidence/validated — той самий клас проблеми, що й у
+    # ZlibHeuristicScanner (signatures.py): короткий magic сам по собі
+    # дає забагато випадкових збігів, особливо всередині вже стиснутих/
+    # високоентропійних ділянок (де такий 2-байтний збіг цілком можливий
+    # чисто випадково). `obj.validated` перевіряємо, щоб не затерти
+    # reason, який могла вже виставити implausible_dimensions вище.
+    if length is None and not plausible_dimensions and obj.validated:
+        obj.validated = False
+        obj.confidence = "low"
+        obj.metadata["reason"] = "no_structure_beyond_soi_magic"
 
 
 # ============================================================================

@@ -96,6 +96,39 @@ class JpegTests(unittest.TestCase):
         self.assertEqual(obj.confidence, "low")
         self.assertEqual(obj.metadata["reason"], "implausible_dimensions")
 
+    def test_bare_soi_magic_with_no_further_structure_downgrades_confidence(self):
+        """
+        Реальний false positive, знайдений на живій прошивці (звіт
+        користувача): SOI (FF D8) випадково збігся всередині ще
+        нерозпакованого LZMA-регіону, після якого йде високоентропійний
+        шум — ні EOI, ні правдоподібного SOF з розмірами знайти
+        неможливо. До цього фіксу такий об'єкт лишався
+        confidence="high", validated=True — 2-байтний magic сам по собі
+        видавався за підтверджений результат.
+        """
+        obj = EmbeddedObject(offset=0, size=None, kind="JPEG", description="JPEG image")
+        # Жодного байта 0xFF — гарантовано десинхронізація одразу на
+        # першому кроці марker-walk-у (ні EOI, ні SOF ніколи не знайдуться),
+        # без ризику випадкового flaky-збігу, як був би з os.urandom().
+        analyze_jpeg(obj, b"\xff\xd8" + bytes([0x41]) * 500)
+        self.assertFalse(obj.validated)
+        self.assertEqual(obj.confidence, "low")
+        self.assertEqual(obj.metadata["reason"], "no_structure_beyond_soi_magic")
+        self.assertIn("EOI not found", obj.metadata["note"])
+
+    def test_eoi_found_without_sof_stays_validated(self):
+        """
+        EOI знайдено (реальна ознака завершеного потоку), навіть якщо
+        SOF/розміри не зустрілись (напр. JPEG без baseline SOF-сегмента
+        в межах доступних даних) — це НЕ той самий "голий magic" випадок,
+        і не повинно понижуватись.
+        """
+        data = b"\xff\xd8" + b"\xff\xd9"  # SOI одразу за ним EOI, без SOF
+        obj = EmbeddedObject(offset=0, size=None, kind="JPEG", description="JPEG image")
+        analyze_jpeg(obj, data)
+        self.assertTrue(obj.validated)
+        self.assertEqual(obj.size, len(data))
+
 
 class LuaTests(unittest.TestCase):
 
