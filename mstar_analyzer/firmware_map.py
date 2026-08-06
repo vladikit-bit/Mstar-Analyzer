@@ -5,10 +5,15 @@ Stage 1 / Stage 4 — Firmware map / Chunk parser.
 розпаковування чи дизасемблювання. Об'єднує знахідки MagicScanner /
 AsciiMarkerScanner з ентропійними регіонами у єдину впорядковану карту.
 
-LzmaHeuristicScanner і ZlibHeuristicScanner свідомо запускаються лише
-всередині high-entropy областей (а не по всьому файлу) — це на порядки
-швидше та відповідає логіці "спочатку ентропія відкидає явно нецікаві
-зони, потім вже шукаємо LZMA/zlib-заголовок".
+LzmaHeuristicScanner свідомо запускається лише всередині high-entropy
+областей (а не по всьому файлу) — це на порядки швидше та відповідає
+логіці "спочатку ентропія відкидає явно нецікаві зони, потім вже
+шукаємо LZMA-заголовок". ZlibHeuristicScanner раніше працював так
+само, але після посилення (signatures.py: BTYPE/LEN~NLEN + bounded
+probe) став достатньо швидким і точним, щоб сканувати ВЕСЬ файл —
+entropy-gating для нього був не лише зайвим, а й ховав малі стиснені
+блоки, чия ентропія розмивається сусіднім низькоентропійним вмістом
+у межах одного вікна (детальніше — ZlibHeuristicScanner, signatures.py).
 """
 
 from __future__ import annotations
@@ -192,6 +197,28 @@ def build_firmware_map(data: bytes, entropy_window: int = 1024, lzma_confidence_
         for f in scanner.scan(data):
             entries.append(MapEntry(offset=f.offset, kind=f.name, confidence=f.confidence, detail=f.detail))
 
+    # 1b) zlib — ТЕЖ по всьому файлу, а не лише в high-entropy регіонах
+    #     (на відміну від LZMA нижче). Раніше був entropy-gated поруч із
+    #     LZMA, з тих самих причин продуктивності — але після посилення
+    #     (signatures.py: BTYPE/LEN~NLEN + обмежений structural probe,
+    #     iter_find() по 32 переліченим заголовках) сканер сам по собі і
+    #     швидкий (64 МБ чистого шуму — найгірший case — ~1.4с), і точний
+    #     (0 хибних спрацювань на широкому наборі структурованих
+    #     низькоентропійних даних: ASCII-текст, 0x00/0xFF padding,
+    #     псевдо-код, рядкові таблиці — перевірено окремо перед цією
+    #     зміною). Entropy-gating для короткого/малого стисненого блоку,
+    #     оточеного низькоентропійним вмістом (типово — конфіг усередині
+    #     0xFF padding), і так уже НЕ рятувало: ентропія вікна, що
+    #     містить лише частину такого блока, розмивається сусідніми
+    #     байтами й не перетинає поріг навіть при малому блоці — тобто
+    #     entropy-gating тут не лише зайвий, а й сам був джерелом
+    #     пропущених (invisible) знахідок. Повнофайловий скан це закриває.
+    zlib_entries = [
+        MapEntry(offset=f.offset, kind=f.name, confidence=f.confidence, detail=f.detail)
+        for f in ZlibHeuristicScanner().scan(data)
+    ]
+    entries.extend(_dedupe_lzma_findings(zlib_entries))
+
     # 2) JFFS2 — теж по всьому файлу (Jffs2Scanner тепер швидкий, див.
     #    signatures.py: iter_find() замість посимвольного Python-циклу,
     #    ~0.03с/32МБ проти ~3с раніше). Один реальний розділ JFFS2 — це
@@ -202,12 +229,17 @@ def build_firmware_map(data: bytes, entropy_window: int = 1024, lzma_confidence_
     # 3) ентропія по всьому файлу
     points = scan_entropy(data, window=entropy_window)
 
-    # 4) LZMA- та zlib-евристики — тільки в межах high-entropy регіонів
-    #    (сильно швидше і точніше; обидва сканери мають високий базовий
-    #    рівень випадкових спрацювань на структурованих/малоентропійних
-    #    ділянках, де відповідного потоку однаково не буде).
+    # 4) LZMA-евристика — тільки в межах high-entropy регіонів. На
+    #    відміну від zlib вище, LZMA-сканер (навіть після lookup-table
+    #    оптимізації, signatures.py) лишається помітно повільнішим на
+    #    найгіршому випадку (32 МБ чистого шуму: ~3.2с проти ~0.8с у
+    #    zlib) і структурно менш обмеженим (перший байт заголовка сам по
+    #    собі валідний у ~29% позицій — немає короткого фіксованого
+    #    патерну, щоб застосувати той самий трюк, що й для zlib/JFFS2).
+    #    Повнофайловий скан для LZMA поки не виправданий тим самим
+    #    аргументом "досить швидко й точно" — залишається під тим самим
+    #    ентропійним префільтром, що й раніше.
     lzma_scanner = LzmaHeuristicScanner()
-    zlib_scanner = ZlibHeuristicScanner()
     for start, end in high_entropy_regions(points, threshold=lzma_confidence_threshold):
         window = data[start:end]
 
@@ -216,12 +248,6 @@ def build_firmware_map(data: bytes, entropy_window: int = 1024, lzma_confidence_
             for f in lzma_scanner.scan(window)
         ]
         entries.extend(_dedupe_lzma_findings(lzma_entries))
-
-        zlib_entries = [
-            MapEntry(offset=start + f.offset, kind=f.name, confidence=f.confidence, detail=f.detail)
-            for f in zlib_scanner.scan(window)
-        ]
-        entries.extend(_dedupe_lzma_findings(zlib_entries))
 
     # 5) сирі "невідомі" регіони за класифікацією ентропії (empty/code/compressed/...)
     #    зводимо сусідні вікна одного класу у діапазони, щоб не засмічувати карту

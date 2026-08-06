@@ -13,7 +13,7 @@ from __future__ import annotations
 import struct
 import unittest
 
-from mstar_analyzer.firmware_map import FirmwareMap, MapEntry, _dedupe_lzma_findings
+from mstar_analyzer.firmware_map import FirmwareMap, MapEntry, _dedupe_lzma_findings, build_firmware_map
 from mstar_analyzer.signatures import LzmaHeuristicScanner, ZlibHeuristicScanner
 
 
@@ -131,6 +131,61 @@ class AsTableExcludeKindsTests(unittest.TestCase):
         self.assertNotIn("zlib", table)
         self.assertNotIn("gzip", table)
         self.assertIn("marker: MStar", table)
+
+
+class ZlibFullFileScanTests(unittest.TestCase):
+    """
+    ZlibHeuristicScanner раніше запускався лише в межах high-entropy
+    регіонів (build_firmware_map()), як і LzmaHeuristicScanner. Після
+    посилення (BTYPE/LEN~NLEN + bounded probe, signatures.py) він
+    тепер сканує ВЕСЬ файл — ключова причина: малий стиснений блок,
+    оточений низькоентропійним вмістом, розмиває СЕРЕДНЮ ентропію
+    вікна, що його містить, нижче порогу навіть якщо сам блок один в
+    один структурно валідний zlib-потік. Entropy-gating для такого
+    випадку не просто зайвий — він і був джерелом пропущеної знахідки.
+    """
+
+    def test_small_zlib_block_in_low_entropy_padding_is_found(self):
+        """
+        Той самий сценарій, що емпірично показав проблему: невеликий
+        (71-байтний) стиснений config-блок всередині стандартного
+        вікна ентропійного сканування (1024 байти), оточений
+        незапрограмованою flash-пам'яттю (0xFF). До цієї зміни
+        відповідне вікно НЕ перетинало поріг ентропії (0.741 замість
+        7.0) і ZlibHeuristicScanner до нього взагалі не діставався.
+        """
+        import zlib
+
+        payload = b'{"version":"1.2.3","model":"TR-9110HD","config":{"a":1,"b":2}}' * 5
+        compressed = zlib.compress(payload, 9)
+
+        data = b"\xff" * 953 + compressed + b"\xff" * (1024 - 953 - len(compressed))
+
+        fw = build_firmware_map(data)
+
+        zlib_entries = [e for e in fw.entries if e.kind == "zlib"]
+        self.assertEqual(len(zlib_entries), 1, fw.entries)
+        self.assertEqual(zlib_entries[0].offset, 953)
+
+    def test_zero_false_positives_on_structured_low_entropy_data(self):
+        """
+        Повнофайловий скан не повинен давати шуму на структурованих
+        (не випадкових) низькоентропійних даних — ASCII-текст,
+        padding, псевдо-код, рядкові таблиці. Перевірено окремо перед
+        внесенням цієї зміни; тест фіксує це як регресію.
+        """
+        samples = [
+            (b"the quick brown fox jumps over the lazy dog " * 50000)[:1_000_000],
+            b"\xff" * 1_000_000,
+            b"\x00" * 1_000_000,
+            bytes((i % 64) for i in range(1_000_000)),
+        ]
+
+        for data in samples:
+            with self.subTest(sample=data[:20]):
+                fw = build_firmware_map(data)
+                zlib_entries = [e for e in fw.entries if e.kind == "zlib"]
+                self.assertEqual(zlib_entries, [])
 
 
 if __name__ == "__main__":

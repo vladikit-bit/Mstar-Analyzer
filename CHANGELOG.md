@@ -16,6 +16,14 @@
 
 
 
+\### Performance
+
+
+
+\* `LzmaHeuristicScanner` — the long-flagged deferred per-byte Python loop — sped up ~2x (32 MB pure noise: 6.33s -> 3.21s) via a precomputed 256-entry props lookup table, replacing a function call + modulo/division arithmetic on every position with a single index. Zero semantic change (verified byte-for-byte against the original function for all 256 values). Unlike JFFS2/zlib, a sparse-search primitive (iter_find/regex) doesn't help here — LZMA's first header byte alone has ~29% valid values, measured to be *slower* than the plain loop when tried.
+
+
+
 \### Fixed
 
 
