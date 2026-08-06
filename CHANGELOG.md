@@ -2,6 +2,44 @@
 
 
 
+\## 2026-08 (cont.) – LZ4, external review fixes, i18n cleanup
+
+
+
+\### Added
+
+
+
+\* uImage payload wiring — `analyze_uimage()` always decoded the header (OS/arch/compression/CRC), but the payload itself never became a tree node. Compressed payloads now nest properly under a `uImage payload (<compression>)` child instead of showing up as an anonymous stream with no link back to the container; previously-invisible cases (`ih_comp=0`/uncompressed, or unsupported compression) now get a real node too. `collect_extract_candidates()` gained an `exclude_ranges` parameter so the parent's own scan doesn't duplicate what the uImage-aware path already covers.
+
+\* LZ4 support — pure-Python, no runtime dependency (stdlib has no lz4 module): `lz4_block.py` (raw block-format decoder) + `extractors/lz4.py` (Frame format, magic `04 22 4D 18`), wired into Stage 2 detection, Stage 5 extraction, and SquashFS's internal block decompression. Correctness verified via round-trip against the `lz4` PyPI package (dev/test-only dependency) — 500+ fuzz cases, all Frame-format flag combinations, 0 failures.
+
+
+
+\### Fixed
+
+
+
+\* `flash_layout.py` didn't know about `JFFS2 filesystem region` entries (they live in `firmware_map.py`'s entry list, not `root.objects`/`root.children`) — a JFFS2 partition showed correctly in the raw "Firmware map" table but as "unclassified" in the higher-level Flash layout. Added `_jffs2_anchors()`.
+
+\* `ZlibHeuristicScanner` strengthened after an external deep-engineering review found a near-100% false-positive rate on real firmware (weak 2-byte RFC 1950 header). Added a free structural check (deflate BTYPE + stored-block LEN~NLEN, no decoder call, ~50% reduction on its own) and a bounded 256-byte input-limited structural probe through the real zlib decoder (result always discarded — never becomes an `ExtractResult`/`FirmwareNode`, staying Stage 2 by the same test applied throughout: does this stage ever produce an artifact something else treats as ground truth). Verified on 40 MB of pure noise (10x the review's sample size): 0 false positives.
+
+\* The early "Firmware map" table (`_run()`, printed before `analyze_node()` runs) no longer prints unconfirmed extraction candidates (zlib/gzip/xz/lzma/bzip2/lz4/SquashFS) as if they were final results — that data was always structurally unconfirmable at that point in the pipeline. The confirmed answer already existed later in the report (`render_node_findings()`'s confirmed/rejected/unresolved collapse) but the early table duplicated the same candidates without that context, visually indistinguishable from a real result.
+
+\* `analyze_jpeg()` reported `confidence=high, validated=True` for a bare SOI magic (`FF D8`) with neither an EOI marker nor a plausible SOF/dimensions found — i.e. zero structural confirmation beyond 2 magic bytes. Found via a real firmware run: a JPEG "object" inside a still-compressed LZMA region turned out to be a coincidental magic match in high-entropy noise. Now downgrades to `low`/`validated=False` in that specific case; a real (if truncated) JPEG that found a plausible SOF is unaffected.
+
+\* Several user-facing validation messages (`object_analyzer.py`: Lua 5.0 / generic Lua / uImage / DTB / ELF structural-check text surfaced via `metadata["header_issues"]`/`metadata["note"]`) were in Ukrainian, inconsistent with the rest of the tool's English output — found via a real report where one such message leaked through. Translated; source comments/docstrings are unaffected (Ukrainian stays the project's developer-facing convention).
+
+
+
+\### Changed
+
+
+
+\* Roadmap.md — LZ4 moved from Stage 2's "Planned" to "Done"; the recently-added JFFS2/uImage work folded into "Current Status".
+
+
+
 \## 2026-08 – Compression & filesystem detection completeness
 
 

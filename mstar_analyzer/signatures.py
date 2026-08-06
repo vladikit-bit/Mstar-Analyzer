@@ -216,6 +216,22 @@ def _decode_properties(props: int):
         return None
 
     return lc, lp, pb
+
+
+# scan() перевіряє _decode_properties() на КОЖНІЙ позиції буфера (на
+# відміну від zlib/JFFS2, тут немає короткого фіксованого патерну —
+# лише 75/256 (~29%) байтових значень props взагалі валідні, тож
+# iter_find()-подібний "рідкісні збіги" прийом сюди не переноситься:
+# заміряно окремо — сам пошук символьним класом через `re` над 32 МБ
+# уже займає ~4с, а це ще ДО перевірки dict_size/usize; переваги не
+# дає). Натомість — precomputed lookup table замість виклику функції
+# з арифметикою (`%`/`//`) на кожній ітерації: заміряно, 5.44с -> 2.93с
+# на 32 МБ (~1.85x) лише за рахунок цього, без жодної зміни того, що
+# приймається чи відхиляється.
+_PROPS_LOOKUP: tuple[tuple[int, int, int] | None, ...] = tuple(
+    _decode_properties(p) for p in range(256)
+)
+
 # ============================================================================
 # LZMA heuristic scanner
 # ============================================================================
@@ -244,9 +260,11 @@ class LzmaHeuristicScanner(Scanner):
 
         limit = n - self.MIN_HEADER + 1
 
+        lookup = _PROPS_LOOKUP
+
         for offset in range(limit):
 
-            decoded = _decode_properties(data[offset])
+            decoded = lookup[data[offset]]
 
             if decoded is None:
                 continue

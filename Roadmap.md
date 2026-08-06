@@ -50,6 +50,7 @@ Supported compression formats:
 * LZMA
 * XZ
 * BZip2
+* LZ4
 
 ---
 
@@ -96,9 +97,12 @@ Goal:
 
 Support the majority of compression formats found inside embedded firmware.
 
+Done:
+
+* LZ4 (pure-Python, no runtime dependency — stdlib has no lz4 module)
+
 Planned:
 
-* LZ4
 * Zstandard
 * LZO
 * LZOP
