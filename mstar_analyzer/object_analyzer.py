@@ -642,19 +642,19 @@ def _analyze_lua_5_0(
     issues: list[str] = []
 
     if endianness not in (0, 1):
-        issues.append(f"endianness byte 0x{endianness:02X} (очікується 0x00 або 0x01)")
+        issues.append(f"endianness byte 0x{endianness:02X} (expected 0x00 or 0x01)")
 
     if size_int not in (2, 4, 8):
-        issues.append(f"size_int={size_int} (очікується 2, 4 або 8)")
+        issues.append(f"size_int={size_int} (expected 2, 4, or 8)")
 
     if size_size_t not in (4, 8):
-        issues.append(f"size_size_t={size_size_t} (очікується 4 або 8)")
+        issues.append(f"size_size_t={size_size_t} (expected 4 or 8)")
 
     if size_instruction not in (4, 8):
-        issues.append(f"size_instruction={size_instruction} (очікується 4 або 8)")
+        issues.append(f"size_instruction={size_instruction} (expected 4 or 8)")
 
     if size_number not in (4, 8):
-        issues.append(f"size_number={size_number} (очікується 4 або 8)")
+        issues.append(f"size_number={size_number} (expected 4 or 8)")
 
     # Розрядність полів опкоду (SIZE_OP/A/B/C) сама по собі довільна —
     # залежить від lopcodes.h конкретної збірки, тож не звіряємо з
@@ -669,18 +669,18 @@ def _analyze_lua_5_0(
         if 0 in (size_op, size_a, size_b, size_c) or total_bits != expected_bits:
             issues.append(
                 f"OP/A/B/C bit widths {size_op}+{size_a}+{size_b}+{size_c}="
-                f"{total_bits} не заповнюють Instruction ({expected_bits} біт)"
+                f"{total_bits} do not fill Instruction ({expected_bits} bits)"
             )
 
     if size_number in (4, 8):
         raw_number = data[pos + LUA50_HEADER_FIXED: pos + LUA50_HEADER_FIXED + size_number]
 
         if len(raw_number) < size_number:
-            issues.append("TEST_NUMBER: недостатньо даних для перевірки")
+            issues.append("TEST_NUMBER: not enough data to check")
         elif not _lua50_test_number_matches(raw_number, size_number, little_endian=(endianness == 1)):
             issues.append(
-                "TEST_NUMBER не збігається з очікуваним π·10⁷ "
-                "(зіпсований заголовок або нестандартний числовий формат)"
+                "TEST_NUMBER does not match the expected π·10⁷ "
+                "(corrupted header or non-standard numeric format)"
             )
 
     if issues:
@@ -689,10 +689,10 @@ def _analyze_lua_5_0(
         obj.metadata["reason"] = "implausible_header_fields"
         obj.metadata["header_issues"] = issues
         obj.metadata["note"] = (
-            "версія в заголовку впізнавана (Lua 5.0, version byte 0x50) —"
-            " сигнатура, ймовірно, не випадкова, але формат тіла"
-            " нестандартний (кастомний/патчений дампер, зсув заголовка,"
-            " або справді пошкоджені дані)"
+            "header version is recognizable (Lua 5.0, version byte 0x50) —"
+            " the signature is likely not accidental, but the body format"
+            " is non-standard (custom/patched dumper, header offset,"
+            " or genuinely corrupted data)"
         )
         return
 
@@ -771,22 +771,22 @@ def analyze_lua(
     issues: list[str] = []
 
     if endianness not in (0, 1):
-        issues.append(f"endianness byte 0x{endianness:02X} (очікується 0x00 або 0x01)")
+        issues.append(f"endianness byte 0x{endianness:02X} (expected 0x00 or 0x01)")
 
     if size_int not in (2, 4, 8):
-        issues.append(f"size_int={size_int} (очікується 2, 4 або 8)")
+        issues.append(f"size_int={size_int} (expected 2, 4, or 8)")
 
     if size_size_t not in (4, 8):
-        issues.append(f"size_size_t={size_size_t} (очікується 4 або 8)")
+        issues.append(f"size_size_t={size_size_t} (expected 4 or 8)")
 
     if size_instruction not in (4, 8):
-        issues.append(f"size_instruction={size_instruction} (очікується 4 або 8)")
+        issues.append(f"size_instruction={size_instruction} (expected 4 or 8)")
 
     if size_number not in (4, 8):
-        issues.append(f"size_number={size_number} (очікується 4 або 8)")
+        issues.append(f"size_number={size_number} (expected 4 or 8)")
 
     if integral_flag not in (0, 1):
-        issues.append(f"integral_flag={integral_flag} (очікується 0 або 1)")
+        issues.append(f"integral_flag={integral_flag} (expected 0 or 1)")
 
     if issues:
         obj.validated = False
@@ -800,9 +800,9 @@ def analyze_lua(
             # це вагоміший сигнал за випадковий збіг 4-байтної сигнатури:
             # ймовірно кастомний/патчений дампер, а не шум.
             obj.metadata["note"] = (
-                "версія в заголовку впізнавана — сигнатура, ймовірно,"
-                " не випадкова, але формат тіла нестандартний"
-                " (кастомний/патчений дампер, або зсув заголовка)"
+                "header version is recognizable — the signature is likely"
+                " not accidental, but the body format is non-standard"
+                " (custom/patched dumper, or header offset)"
             )
 
         return
@@ -1790,8 +1790,8 @@ def analyze_uimage(obj: EmbeddedObject, data: bytes) -> None:
 
     if UIMAGE_HEADER_SIZE + size > available:
         issues.append(
-            f"ih_size={size} виходить за межі доступних даних "
-            f"(потрібно {UIMAGE_HEADER_SIZE + size}, доступно {available})"
+            f"ih_size={size} exceeds available data "
+            f"(needs {UIMAGE_HEADER_SIZE + size}, available {available})"
         )
 
     if issues:
@@ -1859,29 +1859,29 @@ def analyze_dtb(obj: EmbeddedObject, data: bytes) -> None:
     issues: list[str] = []
 
     if magic != DTB_MAGIC:
-        issues.append(f"magic=0x{magic:08X} (очікується 0x{DTB_MAGIC:08X})")
+        issues.append(f"magic=0x{magic:08X} (expected 0x{DTB_MAGIC:08X})")
 
     # DTSpec: "DTSpec compliant client programs shall accept devicetrees
     # of any version backwards compatible with version 17" — 16 це
     # мінімальна документована версія (§5.1), тож усе нижче або
     # аномально високе вважаємо неправдоподібним.
     if not (16 <= version <= 100):
-        issues.append(f"version={version} (неправдоподібне значення)")
+        issues.append(f"version={version} (implausible value)")
 
     if last_comp_version > version:
         issues.append(f"last_comp_version={last_comp_version} > version={version}")
 
     if totalsize < DTB_HEADER_SIZE or totalsize > available:
-        issues.append(f"totalsize={totalsize} виходить за межі доступних даних ({available})")
+        issues.append(f"totalsize={totalsize} exceeds available data ({available})")
 
     elif off_dt_struct < DTB_HEADER_SIZE or off_dt_struct >= totalsize:
-        issues.append(f"off_dt_struct={off_dt_struct} поза межами totalsize={totalsize}")
+        issues.append(f"off_dt_struct={off_dt_struct} is outside totalsize={totalsize}")
 
     elif size_dt_struct == 0 or off_dt_struct + size_dt_struct > totalsize:
-        issues.append(f"size_dt_struct={size_dt_struct} виходить за межі totalsize={totalsize}")
+        issues.append(f"size_dt_struct={size_dt_struct} exceeds totalsize={totalsize}")
 
     elif off_dt_strings < DTB_HEADER_SIZE or off_dt_strings + size_dt_strings > totalsize:
-        issues.append(f"off_dt_strings/size_dt_strings виходять за межі totalsize={totalsize}")
+        issues.append(f"off_dt_strings/size_dt_strings exceed totalsize={totalsize}")
 
     if issues:
         obj.validated = False
@@ -1951,7 +1951,7 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
     else:
         is64 = None
         expected_ehsize = None
-        issues.append(f"ei_class={ei_class} (очікується 1=32-bit або 2=64-bit)")
+        issues.append(f"ei_class={ei_class} (expected 1=32-bit or 2=64-bit)")
 
     if ei_data == 1:
         endian = "<"
@@ -1959,10 +1959,10 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
         endian = ">"
     else:
         endian = ""
-        issues.append(f"ei_data={ei_data} (очікується 1=LE або 2=BE)")
+        issues.append(f"ei_data={ei_data} (expected 1=LE or 2=BE)")
 
     if ei_version != 1:
-        issues.append(f"ei_version={ei_version} (очікується 1)")
+        issues.append(f"ei_version={ei_version} (expected 1)")
 
     # Якщо class/endian невідомі — подальший парсинг безглуздий.
     if is64 is None or endian == "":
@@ -1981,9 +1981,9 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
         obj.confidence = "low"
         obj.metadata["reason"] = "truncated_header"
         obj.metadata["note"] = (
-            f"сигнатура ELF розпізнана (class={'64' if is64 else '32'}-bit, "
-            f"endian={'LE' if endian == '<' else 'BE'}), але заголовок "
-            f"обрізаний — доступно {len(data) - pos} байт, потрібно {expected_ehsize}"
+            f"ELF signature recognized (class={'64' if is64 else '32'}-bit, "
+            f"endian={'LE' if endian == '<' else 'BE'}), but the header is "
+            f"truncated — {len(data) - pos} bytes available, {expected_ehsize} needed"
         )
         return
 
@@ -2005,7 +2005,7 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
 
     if hdr["ehsize"] != expected_ehsize:
         issues.append(
-            f"e_ehsize={hdr['ehsize']} (очікується {expected_ehsize} для "
+            f"e_ehsize={hdr['ehsize']} (expected {expected_ehsize} for "
             f"{'64' if is64 else '32'}-bit)"
         )
 
@@ -2016,20 +2016,20 @@ def analyze_elf(obj: EmbeddedObject, data: bytes) -> None:
         val = hdr[name]
         if val != 0 and val < expected_ehsize:
             issues.append(
-                f"e_{name}=0x{val:X} вказує всередину ELF header "
-                f"(очікується 0 або >= 0x{expected_ehsize:X})"
+                f"e_{name}=0x{val:X} points inside the ELF header "
+                f"(expected 0 or >= 0x{expected_ehsize:X})"
             )
 
     if hdr["phnum"] > ELF_EXTENDED_NUMBER:
-        issues.append("e_phnum використовує extended numbering (0xFFFF)")
+        issues.append("e_phnum uses extended numbering (0xFFFF)")
 
     if hdr["shnum"] > ELF_EXTENDED_NUMBER:
-        issues.append("e_shnum використовує extended numbering (0xFFFF)")
+        issues.append("e_shnum uses extended numbering (0xFFFF)")
 
     # shstrndx: або 0 (SHN_UNDEF), або валідний індекс секції.
     if hdr["shstrndx"] > hdr["shnum"] and hdr["shnum"] != 0:
         issues.append(
-            f"e_shstrndx={hdr['shstrndx']} перевищує e_shnum={hdr['shnum']}"
+            f"e_shstrndx={hdr['shstrndx']} exceeds e_shnum={hdr['shnum']}"
         )
 
     # Накопичені структурні проблеми — demote, але продовжуємо з тім,

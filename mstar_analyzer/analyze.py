@@ -406,9 +406,9 @@ def _run(firmware: Path, json_path: str | None = None, compare_with: str | None 
     print(fw.as_table(exclude_kinds=EXTRACTION_CANDIDATE_KINDS))
     print()
     print(
-        "(потенційні потоки стиснення — lzma/gzip/xz/bzip2/zlib/lz4/SquashFS — "
-        "тут навмисно не показані: на цьому кроці вони ще НЕПІДТВЕРДЖЕНІ. "
-        "Підтверджений результат — нижче, у секції \"Findings\" для кожного вузла.)"
+        "(potential compression streams — lzma/gzip/xz/bzip2/zlib/lz4/SquashFS — "
+        "are intentionally omitted here: at this stage they are still UNCONFIRMED. "
+        "The confirmed result appears below, in each node's \"Findings\" section.)"
     )
 
     print()

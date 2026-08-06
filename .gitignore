@@ -13,3 +13,12 @@ __pycache__/
 .vscode/
 .idea/
 docs/superpowers/
+
+# Development reports
+report.json
+report.txt
+
+reports/
+
+# Local patch archives
+*.patch

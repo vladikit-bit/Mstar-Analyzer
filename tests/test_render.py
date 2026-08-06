@@ -112,13 +112,13 @@ class ObjectMetadataFormattingTests(unittest.TestCase):
         obj = EmbeddedObject(offset=0x444794, size=None, kind="Lua bytecode", description="Compiled Lua chunk")
         obj.metadata = {
             "header_issues": [
-                "size_int=0 (очікується 2, 4 або 8)",
-                "size_size_t=98 (очікується 4 або 8)",
+                "size_int=0 (expected 2, 4, or 8)",
+                "size_size_t=98 (expected 4 or 8)",
             ],
         }
         output = self._render_objects([obj])
-        self.assertIn("- size_int=0 (очікується 2, 4 або 8)", output)
-        self.assertIn("- size_size_t=98 (очікується 4 або 8)", output)
+        self.assertIn("- size_int=0 (expected 2, 4, or 8)", output)
+        self.assertIn("- size_size_t=98 (expected 4 or 8)", output)
         self.assertNotIn("['size_int", output)
 
     def test_empty_list_metadata_prints_nothing_for_that_key(self):
