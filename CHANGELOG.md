@@ -38,6 +38,8 @@
 
 \* Several user-facing validation messages (`object_analyzer.py`: Lua 5.0 / generic Lua / uImage / DTB / ELF structural-check text surfaced via `metadata["header_issues"]`/`metadata["note"]`) were in Ukrainian, inconsistent with the rest of the tool's English output — found via a real report where one such message leaked through. Translated; source comments/docstrings are unaffected (Ukrainian stays the project's developer-facing convention).
 
+\* `ZlibHeuristicScanner` was entropy-gated (scanned only inside `high_entropy_regions()`, same as LZMA) purely for performance from before it was hardened — meaning a small compressed blob surrounded by low-entropy content (e.g. a compressed config block in erased/`0xFF` flash padding) could dilute its window's *average* entropy below the scan threshold and never get looked at, even though the compressed bytes themselves were perfectly valid. Concretely reproduced and fixed: now scans the whole file (verified fast enough — 64 MB pure noise, ~1.4s — and precise enough — 0 false positives on structured low-entropy content — before making the change). LZMA remains entropy-gated; it doesn't yet meet the same bar.
+
 
 
 \### Changed
